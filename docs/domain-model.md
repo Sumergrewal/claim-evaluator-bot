@@ -65,8 +65,9 @@ that line item back through review. Every state change writes an
 - **Relationships:** belongs to one `Policy`.
 - **Invariants:**
   - `parameters` must conform to the schema for its `kind`.
-  - At most one rule of each cost-sharing kind (`copay` or
-    `coinsurance`) per `(policy, service_type)`.
+  - At most one cost-sharing rule (`copay` *or* `coinsurance`, not
+    both) per `(policy, service_type)`. See `decisions.md` for why
+    stacking was forbidden rather than defined.
 
 > **Composability:** several rules can apply to the same `service_type`.
 > A typical "physiotherapy is covered up to $1,000/year with a $20
@@ -425,3 +426,5 @@ reviewer can see they were thought about. Full reasoning in
 | Preauthorization as a first-class entity | String `preauth_ref` on `LineItem`; presence is the only thing checked | Promote to a `Preauthorization` entity with issuance date, expiry, scope; the gate phase looks up by reference and checks validity |
 | Provider as a first-class entity | String `provider_name` on `Claim` | Promote to `Provider` entity; enables network/tier-based rule kinds |
 | Reopening a claim after `paid` | Not allowed; disputes assumed to occur pre-payment | Either track a `reopened_at` separately from `paid_at`, or model payments as their own entity with reversal events |
+| Out-of-pocket maximum (OOPM) | Not modelled; plan-side cost-sharing applies on every covered line item with no annual cap on member responsibility | Add `annual_oopm` to `Policy` and a member-scoped OOPM accumulator (same shape as the limit accumulator); the cost-sharing phase short-circuits to zero once the accumulator hits the cap |
+| Combined cost-sharing on one service (e.g. "$250 copay + 20% coinsurance for ER") | Forbidden by invariant: at most one cost-sharing rule per `(policy, service_type)` | Add a new rule kind (e.g. `copay_plus_coinsurance`) with both parameters and explicit stacking math, rather than letting two existing rules stack |

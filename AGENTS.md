@@ -203,7 +203,7 @@ npm run dev
 
 - [x] **01-framing** — assignment understood, deliverables mapped
 - [x] **02-domain-research** — adjudication / rule patterns understood
-- [~] **03-planning** — domain model, state machines, rule schema, cost-sharing math, deferred-feature list locked in. Still to plan: persistence layout (SQLAlchemy models, repositories, migrations) and seed data (members, policies, coverage rules)
+- [x] **03-planning** — domain model, state machines, rule schema, cost-sharing math, deferred-feature list, sample data (3 members + 3 policies + curated claim set covering every engine path), and persistence layer (SQLAlchemy 2.x, separated domain/ORM, functional repos, per-request session, `create_all` + reset CLI) all locked in. Coverage rules and seed data are YAML in `data/`, loaded on first startup
 - [ ] **04-scaffolding**
 - [ ] **05-backend-core**
 - [ ] **06-backend-adjudication**

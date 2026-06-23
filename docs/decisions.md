@@ -419,6 +419,346 @@ can see they were considered.
 
 ---
 
+## 2026-06-23 — Out-of-pocket maximum (OOPM) deferred
+
+**Context:** OOPM is a near-universal field on real US health plans
+(commonly $5k–$10k for an individual). Once a member's year-to-date
+cost-sharing hits the OOPM, the plan pays 100% of further covered
+charges — deductible-eligible amounts, copays, and coinsurance no
+longer apply for the rest of the period.
+
+**Options considered:**
+
+- Model it. Add `annual_oopm` to `Policy`, maintain a member-scoped
+  OOPM accumulator alongside the existing limit accumulator, and have
+  the cost-sharing phase short-circuit member share to zero once the
+  cap is hit.
+- Defer. Acknowledge it's missing in `domain-model.md`'s "Explicitly
+  deferred" table; note that nothing in the engine prevents adding it
+  later.
+
+**Choice:** Defer.
+
+**Reasoning:**
+
+- An OOPM accumulator has the same query shape as the existing limit
+  accumulator (sum payable-equivalent over current approved decisions,
+  member-scoped, period-scoped). Building it exercises no new
+  domain-modelling pattern the engine doesn't already demonstrate.
+- The rubric values domain decomposition, rule representation, state
+  management, edge cases, and explanations — none of those dimensions
+  is unlocked by adding OOPM. Same reasoning that deferred visit-count
+  limits and the Provider entity.
+- Forward-compatible: `annual_oopm` is a non-breaking nullable column
+  on `Policy` later, and an OOPM short-circuit step can be added in
+  front of copay/coinsurance in the cost-sharing phase without
+  changing the explanation format or any other phase.
+
+---
+
+## 2026-06-23 — Cost-sharing is mutually exclusive: copay OR coinsurance per `(policy, service_type)`, not both
+
+**Context:** The original `CoverageRule` invariant said "at most one
+rule of *each* cost-sharing kind per `(policy, service_type)`," which
+allowed a copay rule and a coinsurance rule to coexist on the same
+service. Real plans sometimes do this ("$250 ER copay + 20%
+coinsurance"). The engine's cost-sharing phase, however, is written
+as if a single rule applies — `member_cost_share = cost_sharing_rule(
+coverable)`. The two were soft-mismatched.
+
+**Options considered:**
+
+- **Define stacking math.** Pick a precedence (e.g. copay first, then
+  coinsurance on the remainder, or vice versa) and bake it into the
+  engine. Cost-sharing phase fires both steps when both rules exist
+  and the explanation shows two cost-sharing lines.
+- **Forbid the combination.** Tighten the invariant to "at most one
+  cost-sharing rule (`copay` *or* `coinsurance`, not both) per
+  `(policy, service_type)`." Cost-sharing phase fires at most one
+  rule per line item.
+
+**Choice:** Forbid. Invariant tightened in `docs/domain-model.md`.
+
+**Reasoning:**
+
+- Real-world stacking rules vary by plan; there is no canonical
+  precedence. Hardcoding one would be opinionated and would not
+  generalise to other plans the reviewer might imagine.
+- Tightening the invariant makes schema and engine agree, rather than
+  papering over the soft mismatch with defensive code or undefined
+  behaviour.
+- Keeps the explanation clean: every cost-sharing step cites exactly
+  one rule. The drill-down stays one-step-per-phase, which is the
+  property that makes the engine explainable.
+- Seed data already respects this — no service in any of the three
+  planned policies uses both kinds — so it is a schema-tightening
+  change, not a behavioural one.
+- If a future plan genuinely needed stacked cost-sharing, the right
+  move would be a new rule `kind` (e.g. `copay_plus_coinsurance`)
+  carrying both parameters with explicit math, not retrofitting two
+  existing rules to stack. Each rule kind stays unambiguous.
+
+---
+
+## 2026-06-23 — Seed data is YAML in `data/`, loaded on first startup; DB persists across restarts; reset via CLI
+
+**Context:** Need to ship reproducible sample data — three policies
+with full coverage-rule sets, plus sample members and claims — to a
+reviewer who clones the repo. The SQLite DB file is gitignored
+(`*.db` in `.gitignore` with the comment "we ship seed data, not a
+populated DB"), so seed data has to live in the repo as text files
+and be loaded into a fresh DB on first run.
+
+**Options considered:**
+
+- **Seed-as-code.** A `seed.py` module with policies, rules, members,
+  and claims as Python literals; called from startup.
+- **Seed-as-data: YAML files** under `data/`, validated against
+  Pydantic models and inserted by a loader.
+- **Seed-as-data: JSON files** in the same place.
+- **SQL fixtures or Alembic data migration.**
+- Loading strategy: **reset on every startup** vs **auto-seed only
+  when DB is empty** (and persist across restarts) vs **manual seed
+  CLI only**.
+
+**Choice:**
+
+- YAML files under `data/`: `policies.yaml` (policies + their rules),
+  `members.yaml`, `claims.yaml`. Money fields quoted as strings to
+  keep `Decimal` parsing exact.
+- A loader in `app/persistence/seed.py` validates each file against
+  Pydantic models matching the rule-kind catalogue, then inserts in
+  dependency order (Member → Policy → CoverageRule → Claim →
+  LineItem) inside a single transaction.
+- FastAPI startup hook calls the loader iff the `policies` table is
+  empty. Otherwise the DB persists across restarts.
+- A separate command, `uv run python -m app.scripts.reset_db`, drops
+  all tables and re-seeds. Documented in the README under "if you
+  want to start over."
+
+**Reasoning:**
+
+- **Coverage rules are already declared "data, not code"** (earlier
+  entry). Encoding rules as Python literals in a `seed.py` would
+  contradict that decision. YAML lets the reviewer open one file,
+  change `cap_amount: "2000.00"` to `"500.00"`, restart, and observe
+  the engine produce a different outcome — that *is* the demo of a
+  data-driven engine.
+- **YAML over JSON** because rule `parameters` are heterogeneous per
+  `kind`; indented YAML is easier to scan and edit than JSON's
+  punctuation. JSON would also force string-quoting on every key.
+- **Money quoted as strings** because YAML's native float parsing
+  silently coerces `1500.00` to `1500.0` (and worse for repeating
+  decimals); quoting keeps the source-of-truth a string until
+  `Decimal()` parses it.
+- **Validate via Pydantic in the loader** so seed-data errors surface
+  at startup with a clear message instead of as a `KeyError` deep
+  inside the engine days later.
+- **Auto-seed-on-empty + CLI reset** is the right ergonomics for a
+  reviewer: realistic by default (they submit a claim, restart the
+  server, the claim is still there), with a single documented command
+  to wipe the slate. Reset-on-every-startup would lose the
+  "submit-and-it-persists" demo. Manual-seed-only would mean the
+  reviewer has to run an extra step before the app is usable.
+- **Idempotent loader** (skip if `policies` table is non-empty) means
+  there is no "re-seed?" prompt or ambiguity.
+
+**Out of scope for the loader (deferred):**
+
+- Schema migrations via Alembic. For the take-home, SQLAlchemy
+  `Base.metadata.create_all()` on startup is sufficient — the schema
+  is small, the DB is throwaway, and a reviewer never carries data
+  across schema changes. Alembic would be the right move if this
+  went production.
+
+---
+
+## 2026-06-23 — Sample data: 3 members one-per-policy, ~13 curated claims covering every engine path
+
+**Context:** Need to seed enough data for a reviewer to see every
+engine behaviour (covered, partial via cap, denied, `needs_review`,
+within-claim accumulator, cross-claim accumulator, cross-plan outcome
+difference) without burying them in noise. The seed has to be small
+enough to read in one sitting and complete enough that no engine
+path is implicitly "untested by the demo."
+
+**Options considered:**
+
+- **Minimal:** 1–2 claims per member, happy-path only. Reviewer has
+  to file claims via the UI to see anything interesting.
+- **Comprehensive:** many claims per member combinatorially
+  exercising every rule.
+- **Curated per-path:** one claim per distinct engine path,
+  hand-designed.
+
+**Choice:** curated per-path.
+
+- **3 members**, one per policy: Alice → BASIC, Bob → PREMIUM, Carol
+  → DENTAL. One policy per member.
+- **~13 claims** designed so every engine path appears at least
+  once:
+  - Pure covered, no cost-sharing (preventive dental)
+  - Deductible absorbs the entire charge (`plan_pays = 0`)
+  - Deductible filled mid-claim then coinsurance applies on the
+    remainder
+  - Multi-line-item claim with accumulator updating between lines
+  - Cross-claim accumulator (an earlier claim consumes a cap; the
+    next one hits zero remaining)
+  - Annual-cap partial coverage with over-limit going to member
+  - Hard exclusion → `denied`
+  - Missing preauth → `needs_review` (only path the engine produces
+    `needs_review`)
+  - Same service, different outcome across plans (bariatric surgery
+    excluded in BASIC, covered with preauth in PREMIUM)
+- Two seed claims marked `paid_at` so the `paid` claim lifecycle
+  state is visible from the first page load.
+
+**Reasoning:**
+
+- **Curated > comprehensive** because the rubric values "is every
+  domain behaviour exercised" more than "is every rule combinatorially
+  enumerated." A short list of well-chosen claims is more legible
+  than a long list of random ones.
+- **Curated > minimal** because making the reviewer file claims to
+  see interesting outcomes hides the engine's range and risks
+  looking underbuilt.
+- **One member per policy** keeps the mental model simple — "Alice
+  has BASIC, Bob has PREMIUM, Carol has DENTAL" — and makes the
+  cross-policy comparison demo (same bariatric surgery, different
+  outcomes) read as "look how the same service hits different rules
+  under different plans."
+- **`paid_at` set on two seed claims** means the `paid` lifecycle
+  state has an instance on first launch; reviewer doesn't have to
+  manually pay a claim to see what `paid` looks like.
+
+The full claim table (which line items per claim, with what charges)
+lives outside this log so it can evolve inside `data/claims.yaml`
+during implementation. The shape and the coverage matrix are what's
+frozen here.
+
+---
+
+## 2026-06-23 — Persistence layer: SQLAlchemy 2.x, separated domain/ORM, functional repos, per-request session, `create_all` + reset CLI
+
+**Context:** With the domain model, rule schema, and seed-data
+format locked in, the persistence layer needs to bridge pure domain
+entities to a SQLite-backed store while preserving the architectural
+rules already established (domain layer has no DB or HTTP imports;
+"rules are data, not code").
+
+This entry bundles eight tightly-coupled sub-decisions in one place
+because splitting them would force a reader to chase four entries to
+understand any one of them.
+
+**Sub-decision A — ORM: SQLAlchemy 2.x with typed `Mapped[...]`
+columns.** Aligns with project-wide "type hints required" rule; gives
+mypy/pyright proper coverage on the persistence layer.
+
+**Sub-decision B — Domain ↔ ORM separation: two classes per entity
+with translation at the boundary.**
+
+- Domain entity: `@dataclass(frozen=True)` in
+  `app/domain/entities.py`. Pure Python.
+- ORM model: SQLAlchemy declarative class in
+  `app/persistence/models.py` with `to_domain()` / `from_domain()`
+  classmethods.
+- Repositories return *domain* objects, never ORM models.
+
+Reasoning:
+
+- `AGENTS.md` mandates the domain layer has no DB imports.
+  Separation is the mechanical enforcement.
+- Frozen dataclasses force explicit mutation — no stealth attribute
+  writes that secretly hit the DB on commit. The adjudication engine
+  becomes a pure function: takes domain objects, returns an
+  `AdjudicationResult` value object.
+- Engine tests need no fixtures, no in-memory DB, no session — plain
+  Python objects only.
+- Translation cost is ~100 mechanical lines across the ~8 entities,
+  upfront and finite.
+
+**Sub-decision C — Repository pattern: module-level functions taking
+a `Session` parameter, returning domain objects.**
+
+Examples: `get_policy_by_id(session, policy_id) -> Policy`,
+`get_active_policy_for(session, member_id, on_date) -> Policy`,
+`sum_payable_for_accumulator(session, member_id, service_type,
+period_start, period_end, before) -> Decimal`.
+
+Reasoning: no shared state; functions are simpler than classes for
+this size; the accumulator query is a SQL aggregate, naturally a
+repo concern — the engine never builds it itself.
+
+**Sub-decision D — Session handling: FastAPI `Depends(get_session)`,
+per-request transaction.** Commit on success, rollback on exception.
+Single transaction per HTTP request — guarantees the
+`AdjudicationDecision` row and the `AuditEvent` row land atomically
+together.
+
+**Sub-decision E — Schema management: `Base.metadata.create_all()`
+at app startup; no Alembic. Schema changes require running
+`uv run python -m app.scripts.reset_db`.**
+
+Reasoning:
+
+- DB is gitignored; every reviewer creates a fresh DB on first run;
+  no shared environment with persistent data.
+- YAML is the source of truth; `reset_db` drops, recreates the
+  schema from the current models, and re-seeds from YAML. Loses
+  nothing.
+- Alembic is the right answer for production; adding it later is
+  non-breaking (it reads from the same declarative base).
+- `create_all()` is additive-only against an existing DB, so the
+  README explicitly tells the reviewer to run `reset_db` after any
+  schema change.
+
+**Sub-decision F — `CoverageRule.parameters` stored as a JSON
+column.** `mapped_column(JSON)`. Validated by Pydantic at the
+seed-loader boundary; engine assumes valid parameters internally.
+
+Reasoning: SQLite has stable JSON support; parameter shapes are
+heterogeneous per `kind`, so per-kind tables would be overkill;
+boundary validation keeps engine reads fast and SQL simple.
+
+**Sub-decision G — Audit events: explicit writes from the service
+layer via a helper, not SQLAlchemy event listeners.**
+
+Single helper `record_audit_event(session, event_type, entity_type,
+entity_id, actor, payload)` in `app/persistence/audit.py`.
+
+Reasoning: explicit beats magical. The audit log is a deliberate
+output the reviewer will inspect; encoding it as `after_update` side
+effects makes "where does this event come from" hard to trace.
+Atomicity is preserved by the per-request transaction (D). Easier
+to test — a service test asserts the right event was recorded by
+inspecting the session.
+
+**Sub-decision H — File layout under `app/persistence/`.**
+
+```text
+app/persistence/
+├── __init__.py
+├── database.py         # engine, SessionLocal, get_session dependency, Base
+├── models.py           # SQLAlchemy ORM classes + to_domain/from_domain
+├── repositories.py     # functions, grouped by entity within the file
+├── seed.py             # YAML loader
+└── audit.py            # record_audit_event helper
+```
+
+The reset entrypoint lives at `app/scripts/reset_db.py` so it's
+discoverable as a CLI script, not buried in the persistence package.
+
+**Why bundle these eight?** They're mutually-reinforcing: the
+domain ↔ ORM separation (B) is what lets repositories return domain
+objects (C); functional repos work because session handling is
+uniform (D); explicit audit writes (G) work because per-request
+transactions (D) guarantee atomicity; JSON parameters (F) work
+because Pydantic validation lives in the seed loader. Keeping them
+together makes the persistence story readable as one narrative
+instead of eight disconnected fragments.
+
+---
+
 <!--
 Future entries below. Format:
 

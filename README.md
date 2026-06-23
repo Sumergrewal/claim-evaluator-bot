@@ -93,6 +93,34 @@ npm run dev
 > Both commands will be functional once their respective phases land
 > (backend: phase 05; frontend: phase 07).
 
+## Resetting the database
+
+The SQLite database lives at `claims.db` in the repo root (gitignored,
+so it never enters version control). On first launch the backend
+auto-seeds it from `data/*.yaml`; on subsequent launches your state
+persists across restarts.
+
+If you want to start from a clean slate — for example after pulling
+schema changes, or to throw away demo state you've created via the UI:
+
+```bash
+uv run python -m app.scripts.reset_db
+```
+
+This drops every table, recreates the schema from the current
+SQLAlchemy models, and re-seeds from `data/*.yaml`.
+
+> **When to run it:** any time the SQLAlchemy models change. The
+> backend uses `Base.metadata.create_all()` (not Alembic) for schema
+> management — that means new tables get created on startup, but
+> existing tables aren't migrated in place. After a model change,
+> `reset_db` is the way to get the new schema. See the persistence
+> decision in [`docs/decisions.md`](docs/decisions.md) for the
+> reasoning.
+
+> Lands in phase 05 alongside the persistence layer; the command
+> doesn't exist yet.
+
 ## Running tests
 
 ```bash
