@@ -10,8 +10,11 @@ for the reasoning behind every non-trivial choice.
 
 ## Status
 
-Foundation only — folder skeleton, docs scaffolding, and agent guidance
-are in place. No application code yet. See the
+Phase 04 scaffolding complete. Backend boots (FastAPI on
+`localhost:8000`) and the frontend (Vite on `localhost:5173`) calls a
+single hello-world endpoint across the CORS boundary, proving the
+end-to-end loop. Domain entities, ORM models, the adjudication engine,
+and the seed loader land in later phases. See the
 [phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker) for progress.
 
 ## Stack
@@ -29,15 +32,17 @@ are in place. No application code yet. See the
 
 ```text
 claim-evaluator-bot/
-├── app/                       # Python backend (FastAPI) — scaffolded in phase 05
+├── app/                       # Python backend (FastAPI)
 │   ├── api/                   # Route handlers (thin HTTP layer)
 │   ├── domain/                # Pure domain logic (entities, state machines) — no DB, no HTTP
 │   ├── adjudication/          # Coverage-rule engine
 │   ├── persistence/           # SQLAlchemy models + repositories
+│   ├── scripts/               # CLI entrypoints (e.g. reset_db) — lands in phase 05
+│   ├── main.py                # FastAPI app entrypoint (hello-world stub for now)
 │   └── tests/                 # pytest suite
 │       ├── domain/            # Pure domain tests (no DB, no HTTP)
 │       └── api/               # API integration tests
-├── frontend/                  # React + TS + Vite SPA — scaffolded in phase 07
+├── frontend/                  # React + TS + Vite SPA (hello-world page for now)
 ├── data/                      # Sample policies, claims, seed data
 ├── docs/
 │   ├── domain-model.md        # Entities, relationships, state machines
@@ -45,13 +50,11 @@ claim-evaluator-bot/
 │   └── self-review.md         # Honest assessment of what's good vs. rough
 ├── ai-artifacts/              # Raw Cursor JSONL session logs (copied at the end, one per phase)
 ├── AGENTS.md                  # Agent guidance: project context + general rules
+├── pyproject.toml             # uv-managed Python project
+├── uv.lock                    # Locked Python deps
+├── .python-version            # 3.11 pin
 ├── README.md
 └── .gitignore
-
-# Added in later phases (not present yet):
-#   pyproject.toml             # uv-managed Python project (phase 05)
-#   .python-version            # 3.11 pin (phase 05)
-#   frontend/package.json      # Vite + React + TS (phase 07)
 ```
 
 ## Prerequisites
@@ -66,32 +69,28 @@ claim-evaluator-bot/
 git clone <this-repo>
 cd claim-evaluator-bot
 
-# Backend (works once phase 05 lands a pyproject.toml)
+# Backend
 uv sync
 
-# Frontend (works once phase 07 scaffolds the Vite app)
+# Frontend
 cd frontend
 npm install
 cd ..
 ```
 
-> **Note:** Neither command does anything useful yet — this repo is
-> currently foundation only (folder skeleton + docs + agent guidance).
-> See the [phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker).
-
 ## Running
 
 ```bash
-# Backend — from repo root
+# Backend — from repo root, http://localhost:8000
 uv run uvicorn app.main:app --reload
 
-# Frontend — in a separate terminal
+# Frontend — in a separate terminal, http://localhost:5173
 cd frontend
 npm run dev
 ```
 
-> Both commands will be functional once their respective phases land
-> (backend: phase 05; frontend: phase 07).
+Open the frontend in a browser; it calls `GET /api/hello` and renders
+the response, confirming the CORS boundary is wired correctly.
 
 ## Resetting the database
 
@@ -118,8 +117,8 @@ SQLAlchemy models, and re-seeds from `data/*.yaml`.
 > decision in [`docs/decisions.md`](docs/decisions.md) for the
 > reasoning.
 
-> Lands in phase 05 alongside the persistence layer; the command
-> doesn't exist yet.
+> Lands in phase 05 alongside the persistence layer; the command and
+> the `claims.db` file don't exist yet.
 
 ## Running tests
 
