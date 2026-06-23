@@ -202,8 +202,8 @@ npm run dev
 ## Phase tracker
 
 - [x] **01-framing** — assignment understood, deliverables mapped
-- [ ] **02-domain-research**
-- [ ] **03-planning**
+- [x] **02-domain-research** — adjudication / rule patterns understood
+- [~] **03-planning** — domain model, state machines, rule schema, cost-sharing math, deferred-feature list locked in. Still to plan: persistence layout (SQLAlchemy models, repositories, migrations) and seed data (members, policies, coverage rules)
 - [ ] **04-scaffolding**
 - [ ] **05-backend-core**
 - [ ] **06-backend-adjudication**
