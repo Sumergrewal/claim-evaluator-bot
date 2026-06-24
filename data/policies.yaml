@@ -1,0 +1,207 @@
+# Sample policies and their coverage rules.
+#
+# Three plans of increasing generosity:
+#   - P-BASIC-2026    $500 deductible, mid-tier coverage, bariatric excluded
+#   - P-PREMIUM-2026  $250 deductible, low cost-share, bariatric covered
+#   - P-DENTAL-2026   $0 deductible, dental-only coverage
+#
+# Coverage rules nest under each policy. Money is stored as quoted
+# strings so Decimal round-trip stays exact (see the seed-data
+# decision in docs/decisions.md). Rule kinds and their parameter
+# shapes are documented in docs/domain-model.md.
+
+- id: P-BASIC-2026
+  member_id: M-001
+  name: "Basic Health 2026"
+  effective_date: 2026-01-01
+  termination_date: 2026-12-31
+  annual_deductible: "500.00"
+  rules:
+    # general_consultation: covered, $25 copay
+    - id: R-BASIC-001
+      service_type: general_consultation
+      kind: service_covered
+      parameters: {}
+    - id: R-BASIC-002
+      service_type: general_consultation
+      kind: copay
+      parameters:
+        amount: "25.00"
+
+    # physiotherapy: covered, $1000/year cap, 20% coinsurance
+    - id: R-BASIC-003
+      service_type: physiotherapy
+      kind: service_covered
+      parameters: {}
+    - id: R-BASIC-004
+      service_type: physiotherapy
+      kind: annual_limit
+      parameters:
+        cap_amount: "1000.00"
+        period: "calendar_year"
+    - id: R-BASIC-005
+      service_type: physiotherapy
+      kind: coinsurance
+      parameters:
+        member_pct: 20
+
+    # mri: covered, preauth required, 20% coinsurance
+    - id: R-BASIC-006
+      service_type: mri
+      kind: service_covered
+      parameters: {}
+    - id: R-BASIC-007
+      service_type: mri
+      kind: preauth_required
+      parameters: {}
+    - id: R-BASIC-008
+      service_type: mri
+      kind: coinsurance
+      parameters:
+        member_pct: 20
+
+    # bariatric_surgery: excluded
+    - id: R-BASIC-009
+      service_type: bariatric_surgery
+      kind: service_excluded
+      parameters: {}
+
+    # wellness_visit: covered, no cost-sharing (preventive)
+    - id: R-BASIC-010
+      service_type: wellness_visit
+      kind: service_covered
+      parameters: {}
+
+- id: P-PREMIUM-2026
+  member_id: M-002
+  name: "Premium Health 2026"
+  effective_date: 2026-01-01
+  termination_date: 2026-12-31
+  annual_deductible: "250.00"
+  rules:
+    # general_consultation: covered, $15 copay
+    - id: R-PREM-001
+      service_type: general_consultation
+      kind: service_covered
+      parameters: {}
+    - id: R-PREM-002
+      service_type: general_consultation
+      kind: copay
+      parameters:
+        amount: "15.00"
+
+    # physiotherapy: covered, $2000/year cap, 10% coinsurance
+    - id: R-PREM-003
+      service_type: physiotherapy
+      kind: service_covered
+      parameters: {}
+    - id: R-PREM-004
+      service_type: physiotherapy
+      kind: annual_limit
+      parameters:
+        cap_amount: "2000.00"
+        period: "calendar_year"
+    - id: R-PREM-005
+      service_type: physiotherapy
+      kind: coinsurance
+      parameters:
+        member_pct: 10
+
+    # mri: covered, preauth required, 10% coinsurance
+    - id: R-PREM-006
+      service_type: mri
+      kind: service_covered
+      parameters: {}
+    - id: R-PREM-007
+      service_type: mri
+      kind: preauth_required
+      parameters: {}
+    - id: R-PREM-008
+      service_type: mri
+      kind: coinsurance
+      parameters:
+        member_pct: 10
+
+    # bariatric_surgery: covered with preauth + 10% coinsurance
+    # (Same service excluded under BASIC -> cross-plan demo)
+    - id: R-PREM-009
+      service_type: bariatric_surgery
+      kind: service_covered
+      parameters: {}
+    - id: R-PREM-010
+      service_type: bariatric_surgery
+      kind: preauth_required
+      parameters: {}
+    - id: R-PREM-011
+      service_type: bariatric_surgery
+      kind: coinsurance
+      parameters:
+        member_pct: 10
+
+    # wellness_visit: covered, no cost-sharing
+    - id: R-PREM-012
+      service_type: wellness_visit
+      kind: service_covered
+      parameters: {}
+
+- id: P-DENTAL-2026
+  member_id: M-003
+  name: "Family Dental 2026"
+  effective_date: 2026-01-01
+  termination_date: 2026-12-31
+  annual_deductible: "0.00"
+  rules:
+    # cleaning: covered, no cost-sharing (preventive)
+    - id: R-DENT-001
+      service_type: cleaning
+      kind: service_covered
+      parameters: {}
+
+    # filling: covered, $40 copay
+    - id: R-DENT-002
+      service_type: filling
+      kind: service_covered
+      parameters: {}
+    - id: R-DENT-003
+      service_type: filling
+      kind: copay
+      parameters:
+        amount: "40.00"
+
+    # crown: covered, $750/year cap, 30% coinsurance
+    - id: R-DENT-004
+      service_type: crown
+      kind: service_covered
+      parameters: {}
+    - id: R-DENT-005
+      service_type: crown
+      kind: annual_limit
+      parameters:
+        cap_amount: "750.00"
+        period: "calendar_year"
+    - id: R-DENT-006
+      service_type: crown
+      kind: coinsurance
+      parameters:
+        member_pct: 30
+
+    # cosmetic_whitening: excluded
+    - id: R-DENT-007
+      service_type: cosmetic_whitening
+      kind: service_excluded
+      parameters: {}
+
+    # root_canal: covered, preauth required, 30% coinsurance
+    - id: R-DENT-008
+      service_type: root_canal
+      kind: service_covered
+      parameters: {}
+    - id: R-DENT-009
+      service_type: root_canal
+      kind: preauth_required
+      parameters: {}
+    - id: R-DENT-010
+      service_type: root_canal
+      kind: coinsurance
+      parameters:
+        member_pct: 30

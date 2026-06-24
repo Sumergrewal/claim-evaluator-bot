@@ -1,0 +1,13 @@
+# Sample members for the demo.
+#
+# One per policy: Alice -> BASIC, Bob -> PREMIUM, Carol -> DENTAL.
+# See data/policies.yaml for the policies these members hold.
+
+- id: M-001
+  name: "Alice Anderson"
+
+- id: M-002
+  name: "Bob Brown"
+
+- id: M-003
+  name: "Carol Chen"

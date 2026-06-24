@@ -1,0 +1,183 @@
+# Sample claims, curated so every engine path appears at least once.
+#
+# Coverage matrix (see "Sample data" entry in docs/decisions.md):
+#   C-CAROL-001   pure covered, paid lifecycle
+#   C-CAROL-002   mixed approved/denied -> partially_approved
+#   C-CAROL-003   missing preauth -> needs_review
+#   C-CAROL-004   intra-claim annual-cap accumulator + over-limit
+#   C-ALICE-001   deductible absorbs entire charge
+#   C-ALICE-002   deductible filled mid-claim, then cost-sharing
+#   C-ALICE-003   baseline physio with coinsurance after deductible met
+#   C-ALICE-004   cross-claim accumulator + over-limit
+#   C-ALICE-005   preauthed MRI with coinsurance
+#   C-ALICE-006   hard exclusion -> denied (contrast with C-BOB-002)
+#   C-BOB-001     deductible + copay, paid lifecycle
+#   C-BOB-002     same service as C-ALICE-006, covered under PREMIUM
+#   C-BOB-003     missing preauth -> needs_review
+#
+# Listed in chronological submitted_at order so the engine's
+# accumulator evolves the way the scenarios assume. Line items
+# default to status `pending` and `preauth_ref` to null -- the seed
+# loader fills both. Money is quoted strings; Decimal round-trip is
+# exact.
+#
+# Two claims (C-BOB-001 and C-CAROL-001) carry `paid_at` to make the
+# `paid` claim lifecycle visible on first launch. Their line items
+# stay `pending` at seed-load time and are filled in by the engine on
+# the same startup (phase 06). Do not hand-author AdjudicationDecision
+# rows in this file; engine output is not seed data.
+
+- id: C-ALICE-001
+  member_id: M-001
+  provider_name: "Northside Family Clinic"
+  service_date: 2026-02-10
+  submitted_at: 2026-02-11T09:30:00
+  line_items:
+    - id: L-ALICE-001-1
+      service_type: general_consultation
+      service_description: "New-patient consultation"
+      charged_amount: "400.00"
+
+- id: C-BOB-001
+  member_id: M-002
+  provider_name: "Eastside Health Group"
+  service_date: 2026-03-01
+  submitted_at: 2026-03-02T11:15:00
+  paid_at: 2026-03-15T16:00:00
+  line_items:
+    - id: L-BOB-001-1
+      service_type: general_consultation
+      service_description: "Annual physical"
+      charged_amount: "300.00"
+
+- id: C-ALICE-002
+  member_id: M-001
+  provider_name: "Northside Family Clinic"
+  service_date: 2026-03-15
+  submitted_at: 2026-03-16T10:00:00
+  line_items:
+    - id: L-ALICE-002-1
+      service_type: general_consultation
+      service_description: "Follow-up visit"
+      charged_amount: "200.00"
+
+- id: C-CAROL-002
+  member_id: M-003
+  provider_name: "Sunrise Dental"
+  service_date: 2026-04-10
+  submitted_at: 2026-04-11T13:45:00
+  line_items:
+    - id: L-CAROL-002-1
+      service_type: filling
+      service_description: "Composite filling, tooth #14"
+      charged_amount: "150.00"
+    - id: L-CAROL-002-2
+      service_type: cosmetic_whitening
+      service_description: "Take-home whitening kit"
+      charged_amount: "200.00"
+
+- id: C-ALICE-003
+  member_id: M-001
+  provider_name: "Riverside Physiotherapy"
+  service_date: 2026-04-20
+  submitted_at: 2026-04-21T08:30:00
+  line_items:
+    - id: L-ALICE-003-1
+      service_type: physiotherapy
+      service_description: "PT sessions (10 visits)"
+      charged_amount: "800.00"
+
+- id: C-ALICE-005
+  member_id: M-001
+  provider_name: "City Imaging Center"
+  service_date: 2026-05-05
+  submitted_at: 2026-05-06T14:00:00
+  line_items:
+    - id: L-ALICE-005-1
+      service_type: mri
+      service_description: "MRI, left knee"
+      charged_amount: "1500.00"
+      preauth_ref: "PRE-12345"
+
+- id: C-CAROL-001
+  member_id: M-003
+  provider_name: "Sunrise Dental"
+  service_date: 2026-05-15
+  submitted_at: 2026-05-16T09:00:00
+  paid_at: 2026-05-20T14:30:00
+  line_items:
+    - id: L-CAROL-001-1
+      service_type: cleaning
+      service_description: "Routine cleaning and checkup"
+      charged_amount: "80.00"
+
+- id: C-CAROL-003
+  member_id: M-003
+  provider_name: "Sunrise Dental"
+  service_date: 2026-06-01
+  submitted_at: 2026-06-02T15:00:00
+  line_items:
+    - id: L-CAROL-003-1
+      service_type: root_canal
+      service_description: "Root canal, tooth #19 (no preauth on file)"
+      charged_amount: "900.00"
+
+- id: C-ALICE-004
+  member_id: M-001
+  provider_name: "Riverside Physiotherapy"
+  service_date: 2026-06-10
+  submitted_at: 2026-06-11T11:00:00
+  line_items:
+    - id: L-ALICE-004-1
+      service_type: physiotherapy
+      service_description: "PT sessions (5 visits)"
+      charged_amount: "400.00"
+
+- id: C-CAROL-004
+  member_id: M-003
+  provider_name: "Sunrise Dental"
+  service_date: 2026-06-15
+  submitted_at: 2026-06-16T10:30:00
+  line_items:
+    - id: L-CAROL-004-1
+      service_type: crown
+      service_description: "Crown, tooth #3"
+      charged_amount: "600.00"
+    - id: L-CAROL-004-2
+      service_type: crown
+      service_description: "Crown, tooth #14"
+      charged_amount: "400.00"
+
+- id: C-ALICE-006
+  member_id: M-001
+  provider_name: "Metropolitan Surgical Center"
+  service_date: 2026-07-01
+  submitted_at: 2026-07-02T08:00:00
+  line_items:
+    - id: L-ALICE-006-1
+      service_type: bariatric_surgery
+      service_description: "Gastric sleeve procedure"
+      charged_amount: "20000.00"
+
+- id: C-BOB-002
+  member_id: M-002
+  provider_name: "Metropolitan Surgical Center"
+  service_date: 2026-08-20
+  submitted_at: 2026-08-21T09:00:00
+  line_items:
+    - id: L-BOB-002-1
+      service_type: bariatric_surgery
+      service_description: "Gastric sleeve procedure"
+      charged_amount: "25000.00"
+      preauth_ref: "PRE-99999"
+
+- id: C-BOB-003
+  member_id: M-002
+  provider_name: "City Imaging Center"
+  service_date: 2026-09-15
+  submitted_at: 2026-09-16T13:00:00
+  line_items:
+    - id: L-BOB-003-1
+      service_type: mri
+      service_description: "MRI, lumbar spine (no preauth on file)"
+      charged_amount: "1200.00"
