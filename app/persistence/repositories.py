@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.domain.entities import (
@@ -348,6 +348,42 @@ def list_audit_events_for(
     return [r.to_domain() for r in rows]
 
 
+def list_audit_events_for_claim(
+    session: Session, claim_id: str
+) -> list[AuditEvent]:
+    """Audit events for a claim and every line item under it, chronological.
+
+    The claim detail view needs a single timeline that interleaves
+    claim-level events (e.g. `claim.submitted`, `claim.paid`) with
+    line-item-level events (`line_item.decided`). One SQL query with
+    an OR over both `entity_type` cases keeps this consistent with the
+    underlying audit log and avoids a Python-side merge that could
+    re-order ties differently than the dedicated `GET .../audit`
+    endpoints.
+    """
+    line_item_id_subq = select(LineItemModel.id).where(
+        LineItemModel.claim_id == claim_id
+    )
+    stmt = (
+        select(AuditEventModel)
+        .where(
+            or_(
+                and_(
+                    AuditEventModel.entity_type == "claim",
+                    AuditEventModel.entity_id == claim_id,
+                ),
+                and_(
+                    AuditEventModel.entity_type == "line_item",
+                    AuditEventModel.entity_id.in_(line_item_id_subq),
+                ),
+            )
+        )
+        .order_by(AuditEventModel.occurred_at, AuditEventModel.id)
+    )
+    rows = session.scalars(stmt).all()
+    return [r.to_domain() for r in rows]
+
+
 # --- Internals -------------------------------------------------------------
 
 
@@ -383,4 +419,5 @@ __all__: Sequence[str] = (
     "sum_payable_for_accumulator",
     "sum_deductible_applied",
     "list_audit_events_for",
+    "list_audit_events_for_claim",
 )

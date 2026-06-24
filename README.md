@@ -10,12 +10,18 @@ for the reasoning behind every non-trivial choice.
 
 ## Status
 
-Phase 04 scaffolding complete. Backend boots (FastAPI on
-`localhost:8000`) and the frontend (Vite on `localhost:5173`) calls a
-single hello-world endpoint across the CORS boundary, proving the
-end-to-end loop. Domain entities, ORM models, the adjudication engine,
-and the seed loader land in later phases. See the
-[phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker) for progress.
+Backend through **phase 07** (REST API for members, claims, and
+audit). On first launch the app seeds from `data/*.yaml` and
+adjudicates every pending line item before serving requests.
+
+The frontend is still the phase-04 hello-world scaffold — it calls
+`GET /api/hello`, which no longer exists. Phase 08 replaces it with
+the real claims UI. Until then, explore the API via
+[http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI)
+or the endpoints below.
+
+See the [phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker) for
+progress.
 
 ## Stack
 
@@ -37,12 +43,14 @@ claim-evaluator-bot/
 │   ├── domain/                # Pure domain logic (entities, state machines) — no DB, no HTTP
 │   ├── adjudication/          # Coverage-rule engine
 │   ├── persistence/           # SQLAlchemy models + repositories
-│   ├── scripts/               # CLI entrypoints (e.g. reset_db) — lands in phase 05
-│   ├── main.py                # FastAPI app entrypoint (hello-world stub for now)
+│   ├── scripts/               # CLI entrypoints (reset_db)
+│   ├── main.py                # FastAPI app entrypoint
 │   └── tests/                 # pytest suite
 │       ├── domain/            # Pure domain tests (no DB, no HTTP)
-│       └── api/               # API integration tests
-├── frontend/                  # React + TS + Vite SPA (hello-world page for now)
+│       ├── persistence/       # Repository and seed-loader tests
+│       ├── adjudication/      # Rules engine and service tests
+│       └── api/               # HTTP integration tests (TestClient)
+├── frontend/                  # React + TS + Vite SPA (phase-04 stub until phase 08)
 ├── data/                      # Sample policies, claims, seed data
 ├── docs/
 │   ├── domain-model.md        # Entities, relationships, state machines
@@ -89,8 +97,49 @@ cd frontend
 npm run dev
 ```
 
-Open the frontend in a browser; it calls `GET /api/hello` and renders
-the response, confirming the CORS boundary is wired correctly.
+Open [http://localhost:8000/docs](http://localhost:8000/docs) for
+interactive API docs. The frontend page will error until phase 08
+replaces the hello-world call.
+
+## API (phase 07)
+
+All routes are under `/api`. Responses use JSON; money fields are
+strings (e.g. `"150.00"`) for exact `Decimal` round-trip.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/members` | List members (for filters and submit form) |
+| `GET` | `/api/claims` | List claims; optional `?member_id=` filter |
+| `GET` | `/api/claims/{claim_id}` | Claim drill-down: line items, current decisions, explanations, embedded audit timeline |
+| `POST` | `/api/claims` | Submit a new claim; server generates ids, adjudicates every line item, returns the same shape as the drill-down |
+| `GET` | `/api/claims/{claim_id}/audit` | Audit timeline for a claim and its line items |
+| `GET` | `/api/line-items/{line_item_id}/audit` | Audit timeline scoped to one line item |
+
+**Submit body** (`POST /api/claims`):
+
+```json
+{
+  "member_id": "M-001",
+  "provider_name": "Northside Family Clinic",
+  "service_date": "2026-06-15",
+  "line_items": [
+    {
+      "service_type": "general_consultation",
+      "service_description": "Follow-up visit",
+      "charged_amount": "200.00",
+      "preauth_ref": null
+    }
+  ]
+}
+```
+
+Unknown `member_id` on filter or submit returns **404**. Invalid
+JSON shape returns **422**. A claim with no active policy on
+`service_date` is still accepted (**201**); the engine denies it with
+a structured explanation in the response.
+
+Design rationale for these choices lives in
+[`docs/decisions.md`](docs/decisions.md) (2026-06-24 phase 07 entry).
 
 ## Resetting the database
 
@@ -116,9 +165,6 @@ SQLAlchemy models, and re-seeds from `data/*.yaml`.
 > `reset_db` is the way to get the new schema. See the persistence
 > decision in [`docs/decisions.md`](docs/decisions.md) for the
 > reasoning.
-
-> Lands in phase 05 alongside the persistence layer; the command and
-> the `claims.db` file don't exist yet.
 
 ## Running tests
 

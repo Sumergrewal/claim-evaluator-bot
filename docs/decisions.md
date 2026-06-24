@@ -1022,6 +1022,225 @@ schema) with no engine re-design surface.
 
 ---
 
+## 2026-06-24 — Phase 07 backend API: wire contract, audit exposure, submit flow
+
+**Context:** Phase 06 left adjudication as a Python service entry point
+(`adjudicate_line_item`) with no HTTP. Phase 07 adds the REST layer
+the React UI (phase 08) will consume: list claims, drill into a claim,
+submit a new claim, and read audit history. No domain or engine
+changes — only route handlers, Pydantic schemas, and one new repo
+query for merged audit timelines.
+
+This entry bundles the API-shape decisions made during implementation.
+Each is small on its own; together they define the contract the
+frontend will build against.
+
+**Sub-decision A — Pydantic schemas in `app/api/schemas.py`, kept
+separate from domain entities.**
+
+Route handlers translate at the boundary (`MemberOut.from_domain(...)`,
+`ClaimDetailOut.from_domain(...)`). Domain dataclasses never import
+FastAPI or Pydantic.
+
+**Options considered:**
+
+- Reuse domain entities as response models directly.
+- Separate Pydantic models in `app/api/schemas.py` (chosen).
+
+**Choice:** separate schemas.
+
+**Reasoning:** the wire shape and the domain shape diverge in obvious
+ways — claim payloads carry denormalized `member_name` and derived
+`adjudication_state`, line items embed a nested `current_decision`,
+and money on the explanation JSON is already stored as quoted strings.
+Keeping schemas separate means the API can evolve (pagination fields,
+UI-only rollups) without touching the engine or persistence layers.
+The domain stays pure, which was a project invariant from day one.
+
+**Sub-decision B — `GET /api/members` plus `member_name` on every
+claim payload.**
+
+The claim list and submit form both need member names. Without them,
+the UI would either fetch `/api/members` on every list render and
+join client-side, or show raw ids like `M-001`.
+
+**Options considered:**
+
+- Members endpoint only; UI joins by id.
+- Denormalized `member_name` only; UI extracts members from the claim
+  list.
+- Both endpoint and denormalized name (chosen).
+
+**Choice:** both.
+
+**Reasoning:** `/api/members` is the natural source for dropdowns
+(filter + submit picker). Denormalizing `member_name` onto
+`ClaimSummaryOut` / `ClaimDetailOut` means the list view renders in
+one round trip — the reviewer opening `/api/claims` in a browser or
+the UI's first paint doesn't need a second fetch to turn ids into
+names. The duplication is tiny (three members, one name string per
+claim row) and read-only.
+
+**Sub-decision C — Audit timeline embedded on the claim drill-down
+*and* available via dedicated endpoints.**
+
+`GET /api/claims/{id}` returns `audit_events[]` inline. Two additional
+read-only routes expose the same data alone:
+`GET /api/claims/{id}/audit` and
+`GET /api/line-items/{line_item_id}/audit`.
+
+**Options considered:**
+
+- Dedicated endpoints only; detail view fetches audit separately.
+- Embedded only; no dedicated routes.
+- Both (chosen).
+
+**Choice:** both.
+
+**Reasoning:** the detail view wants history on first paint — one
+fetch, no waterfall. A dedicated audit route is still useful when the
+UI only needs to refresh the timeline after an action (or when
+building a line-item-focused panel) without re-downloading every line
+item and decision. Both paths call the same repo helpers, so they
+cannot drift.
+
+**Sub-decision D — `list_audit_events_for_claim` as one SQL query.**
+
+The merged claim timeline interleaves claim-level events
+(`claim.submitted`, future `claim.paid`) with line-item events
+(`line_item.decided`) in chronological order.
+
+**Options considered:**
+
+- Fetch claim events and line-item events separately; merge and sort
+  in Python.
+- One query with an `OR` over `(entity_type, entity_id)` cases
+  (chosen).
+
+**Choice:** one query in `app/persistence/repositories.py`.
+
+**Reasoning:** sorting belongs in one place. Two queries merged in
+Python can disagree with the dedicated line-item endpoint on tie-break
+order or miss events if someone adds a filter on one path and not the
+other. The query is straightforward; the repo already had
+`list_audit_events_for` for a single entity — this extends that pattern
+to the parent claim plus all its line items.
+
+**Sub-decision E — Server-generated ids on `POST /api/claims`.**
+
+Pattern: `C-<uuid hex>` for the claim;
+`L-<uuid hex>-001`, `L-<uuid hex>-002`, … for line items in
+submission order.
+
+**Options considered:**
+
+- Client supplies ids (like the seed YAML does).
+- Server generates opaque UUIDs (chosen).
+- Server generates human-readable ids mimicking seed style
+  (`C-ALICE-004`).
+
+**Choice:** server UUIDs with a shared suffix and a numeric tail on
+line items.
+
+**Reasoning:** id generation is a server concern — clients should not
+need to guarantee uniqueness or know the id format. UUIDs are simple
+and collision-safe. The shared suffix plus `-001`, `-002` tail is a
+small extra: `list_line_items_for_claim` orders by `line_item.id`, so
+lexicographic id order matches submission order without an extra
+`sequence` column. Human-readable ids would be cute in a demo but
+add naming rules the API doesn't need.
+
+**Sub-decision F — Unknown `member_id` → HTTP 404 on filter and submit.**
+
+`GET /api/claims?member_id=…` and `POST /api/claims` both 404 when
+the member does not exist.
+
+**Options considered:**
+
+- Filter: return an empty list for any string (including typos).
+- Submit: let SQLite raise a foreign-key error → 500.
+- 404 with the bad id in the detail (chosen).
+
+**Choice:** 404 in both cases.
+
+**Reasoning:** an empty list looks like "this member has no claims,"
+which is a different thing from "this member id is wrong." A 404 makes
+typos visible immediately. On submit, surfacing an `IntegrityError` as
+500 would tell the reviewer nothing useful; validating up front keeps
+errors intentional and readable.
+
+**Sub-decision G — Eligibility failures are engine outcomes, not HTTP
+4xx on submit.**
+
+If `service_date` falls outside every active policy window, the engine's
+eligibility phase writes a `denied` decision with an explanation step
+(`result: fail`, `terminating: true`). `POST /api/claims` still
+returns **201** with a full `ClaimDetailOut`.
+
+**Options considered:**
+
+- Reject the submit with 422 when no policy is active on
+  `service_date`.
+- Let the engine deny with a normal decision row (chosen).
+
+**Choice:** engine denial, 201 response.
+
+**Reasoning:** from the caller's perspective, the claim was accepted
+and processed — the rules said no. That matches how every other denial
+(coverage exclusion, exhausted limit) already works. A 422 would mix
+"your JSON was invalid" with "your claim was valid but uncovered,"
+which are different user-facing messages. The UI can read
+`adjudication_state` and the explanation the same way for eligibility
+denials as for coverage denials.
+
+**Sub-decision H — `session.flush()` before the adjudication loop on
+submit.**
+
+After inserting the claim and line-item rows, the handler flushes the
+session before calling `adjudicate_line_item` for each line item.
+
+**Reasoning:** `adjudicate_line_item` loads the line item with
+`session.get(...)`, which only sees flushed rows. Without an explicit
+flush, the first adjudication call raises "line item not found" even
+though the row is pending in the same transaction. The seed loader
+already flushes between dependency layers for the same reason; submit
+follows that pattern. The per-request transaction (`Depends(get_session)`)
+still commits everything atomically on success — flush is visibility
+inside the transaction, not an early commit.
+
+**Sub-decision I — Route modules split by resource; `/api/hello`
+removed.**
+
+`routes_members.py`, `routes_claims.py`, `routes_audit.py`, plus
+`schemas.py`. The phase-04 hello-world route was deleted once real
+routes were wired.
+
+**Reasoning:** one file per resource keeps handlers easy to find and
+matches the repo layout described in planning. Hello was scaffolding
+to prove CORS; keeping it would clutter OpenAPI and confuse the
+reviewer about which endpoints are real. The frontend still calls it
+until phase 08 rewrites the UI.
+
+**Sub-decision J — API tests use in-memory SQLite with `StaticPool`.**
+
+The `api_client` fixture builds a fresh DB per test: schema from ORM
+metadata, seed YAML loaded, startup adjudication batch run,
+`get_session` overridden to bind the in-memory engine.
+
+**Reasoning:** bare `sqlite:///:memory:` creates a *new* empty database
+on every connection. Seeding on one connection and handling HTTP on
+another silently produced "no such table" failures. `StaticPool` reuses
+a single connection so seed data and route handlers see the same DB.
+Skipping the production lifespan avoids double-seeding against the
+real `claims.db` file on disk.
+
+**Deferred (no routes in phase 07):** disputes, reviewer overrides,
+marking a claim paid (`paid_at`), pagination, auth. The engine and
+domain model know about some of these; the HTTP layer does not expose
+them yet.
+
+---
+
 <!--
 Future entries below. Format:
 

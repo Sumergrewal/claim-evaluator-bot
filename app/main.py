@@ -11,8 +11,17 @@ Wires the persistence layer to the HTTP layer:
      so the seed's two paid_at-set claims (C-BOB-001, C-CAROL-001)
      never reach the UI in the "paid_at set, line items pending"
      intermediate state. The batch is a no-op on subsequent restarts.
-- The only HTTP route at this point is `GET /api/hello`, kept so the
-  frontend's CORS check still passes. Real routes land in phase 07.
+- HTTP routes are mounted from `app/api/routes_*.py`:
+
+  - `GET /api/members` — member list for UI filters and submit form.
+  - `GET /api/claims`, `GET /api/claims/{id}`, `POST /api/claims` —
+    list (with optional member filter), drill-down, and submit +
+    adjudicate.
+  - `GET /api/claims/{id}/audit`, `GET /api/line-items/{id}/audit` —
+    dedicated audit timelines (same shape as the embedded timeline on
+    the claim drill-down).
+
+The placeholder `GET /api/hello` from phase 04 scaffolding is removed.
 
 The seed and the adjudication batch use separate transactions on
 purpose: a failed adjudication shouldn't roll back the seed (the
@@ -29,9 +38,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from app.adjudication.startup import adjudicate_all_pending
+from app.api.routes_audit import router as audit_router
+from app.api.routes_claims import router as claims_router
+from app.api.routes_members import router as members_router
 from app.logging_config import configure_logging
 from app.persistence import models  # noqa: F401  registers tables on Base.metadata
 from app.persistence.database import Base, SessionLocal, engine
@@ -83,8 +94,7 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "Claims processing system for an insurance company. "
-        "Phase 05 backend core — persistence layer wired up; "
-        "engine and API routes land in phases 06 and 07."
+        "REST API: members, claims, line items, decisions, audit."
     ),
     lifespan=lifespan,
 )
@@ -97,17 +107,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-class HelloResponse(BaseModel):
-    """Payload returned by `GET /api/hello`."""
-
-    message: str
-    phase: str
-
-
-@app.get("/api/hello", response_model=HelloResponse)
-def hello() -> HelloResponse:
-    return HelloResponse(
-        message="Hello from the claim-evaluator-bot backend.",
-        phase="05-backend-core",
-    )
+app.include_router(members_router)
+app.include_router(claims_router)
+app.include_router(audit_router)

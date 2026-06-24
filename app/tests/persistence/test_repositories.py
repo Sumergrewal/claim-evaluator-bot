@@ -24,6 +24,7 @@ from app.domain.entities import (
     Policy,
 )
 from app.persistence import repositories as repo
+from app.persistence.audit import record_audit_event
 from app.persistence.models import (
     AdjudicationDecisionModel,
     ClaimModel,
@@ -601,6 +602,127 @@ def test_list_line_items_leaves_derived_amounts_none_when_no_decision(
     items = repo.list_line_items_for_claim(session, "C1")
     assert items[0].payable_amount is None
     assert items[0].member_responsibility is None
+
+
+# --- Audit timeline for a claim -------------------------------------------
+
+
+def test_list_audit_events_for_claim_merges_claim_and_line_item_events(
+    session: Session,
+) -> None:
+    """The claim drill-down's timeline is one query that interleaves
+    `entity_type='claim'` events with `entity_type='line_item'` events
+    on every line item under that claim, ordered by `occurred_at`.
+    """
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("100.00"), service_date=date(2026, 3, 1),
+    )
+    _add_approved_physio(
+        session, claim_id="C2", line_id="L2-OTHER", decision_id="D2",
+        payable=Decimal("50.00"), service_date=date(2026, 3, 2),
+    )
+    session.flush()
+
+    record_audit_event(
+        session,
+        event_type="claim.submitted",
+        entity_type="claim",
+        entity_id="C1",
+        actor="member",
+        occurred_at=datetime(2026, 3, 1, 9, 0),
+    )
+    record_audit_event(
+        session,
+        event_type="line_item.decided",
+        entity_type="line_item",
+        entity_id="L1",
+        actor="system",
+        occurred_at=datetime(2026, 3, 1, 9, 5),
+    )
+    record_audit_event(
+        session,
+        event_type="line_item.decided",
+        entity_type="line_item",
+        entity_id="L2-OTHER",
+        actor="system",
+        occurred_at=datetime(2026, 3, 2, 9, 5),
+    )
+    session.commit()
+
+    events = repo.list_audit_events_for_claim(session, "C1")
+    assert [e.event_type for e in events] == [
+        "claim.submitted",
+        "line_item.decided",
+    ]
+    assert [e.entity_id for e in events] == ["C1", "L1"]
+
+
+def test_list_audit_events_for_claim_is_chronological(
+    session: Session,
+) -> None:
+    """A line-item event written before the claim-submitted event
+    should still come first; ordering is by `occurred_at`, not by
+    write order.
+    """
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("100.00"), service_date=date(2026, 3, 1),
+    )
+    session.flush()
+
+    record_audit_event(
+        session,
+        event_type="line_item.decided",
+        entity_type="line_item",
+        entity_id="L1",
+        actor="system",
+        occurred_at=datetime(2026, 3, 1, 9, 0),
+    )
+    record_audit_event(
+        session,
+        event_type="claim.submitted",
+        entity_type="claim",
+        entity_id="C1",
+        actor="member",
+        occurred_at=datetime(2026, 3, 1, 10, 0),
+    )
+    session.commit()
+
+    events = repo.list_audit_events_for_claim(session, "C1")
+    assert [e.event_type for e in events] == [
+        "line_item.decided",
+        "claim.submitted",
+    ]
+
+
+def test_list_audit_events_for_claim_excludes_other_claims_events(
+    session: Session,
+) -> None:
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("100.00"), service_date=date(2026, 3, 1),
+    )
+    _add_approved_physio(
+        session, claim_id="C2", line_id="L2", decision_id="D2",
+        payable=Decimal("100.00"), service_date=date(2026, 3, 2),
+    )
+    session.flush()
+
+    record_audit_event(
+        session, event_type="claim.submitted", entity_type="claim",
+        entity_id="C2", actor="member",
+    )
+    record_audit_event(
+        session, event_type="line_item.decided", entity_type="line_item",
+        entity_id="L2", actor="system",
+    )
+    session.commit()
+
+    assert repo.list_audit_events_for_claim(session, "C1") == []
 
 
 # --- FK enforcement on the underlying schema ------------------------------
