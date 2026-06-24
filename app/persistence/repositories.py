@@ -261,6 +261,54 @@ def sum_payable_for_accumulator(
     return Decimal(result) if result is not None else Decimal("0")
 
 
+def sum_deductible_applied(
+    session: Session,
+    *,
+    member_id: str,
+    period_start: date,
+    period_end: date,
+    exclude_line_item_id: str | None = None,
+) -> Decimal:
+    """Sum of `deductible_applied` over current approved decisions for
+    `member_id` whose claim's `service_date` falls in
+    `[period_start, period_end]`.
+
+    The deductible accumulator is *member-scoped* and *cross-service-type*
+    (the limit accumulator is service-type-scoped). Same supersession
+    and exclude-line-item rules as `sum_payable_for_accumulator`. See
+    the 2026-06-24 phase-06 entry in `docs/decisions.md` for the
+    rationale for storing this as a column rather than parsing prior
+    decisions' explanation JSON.
+    """
+    superseder = aliased(AdjudicationDecisionModel)
+    stmt = (
+        select(
+            func.coalesce(
+                func.sum(AdjudicationDecisionModel.deductible_applied), 0
+            )
+        )
+        .join(
+            LineItemModel,
+            LineItemModel.id == AdjudicationDecisionModel.line_item_id,
+        )
+        .join(ClaimModel, ClaimModel.id == LineItemModel.claim_id)
+        .outerjoin(
+            superseder,
+            superseder.supersedes_id == AdjudicationDecisionModel.id,
+        )
+        .where(superseder.id.is_(None))
+        .where(AdjudicationDecisionModel.outcome == DecisionOutcome.APPROVED)
+        .where(ClaimModel.member_id == member_id)
+        .where(ClaimModel.service_date >= period_start)
+        .where(ClaimModel.service_date <= period_end)
+    )
+    if exclude_line_item_id is not None:
+        stmt = stmt.where(LineItemModel.id != exclude_line_item_id)
+
+    result = session.scalar(stmt)
+    return Decimal(result) if result is not None else Decimal("0")
+
+
 # --- Audit events ----------------------------------------------------------
 
 
@@ -309,5 +357,6 @@ __all__: Sequence[str] = (
     "get_current_decision_for_line_item",
     "list_decisions_for_line_item",
     "sum_payable_for_accumulator",
+    "sum_deductible_applied",
     "list_audit_events_for",
 )

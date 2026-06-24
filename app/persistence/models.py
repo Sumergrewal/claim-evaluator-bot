@@ -234,6 +234,7 @@ class AdjudicationDecisionModel(Base):
     )
     payable_amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     member_responsibility: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    deductible_applied: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
     explanation: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     supersedes_id: Mapped[str | None] = mapped_column(
         ForeignKey("adjudication_decisions.id"), nullable=True
@@ -252,6 +253,7 @@ class AdjudicationDecisionModel(Base):
             member_responsibility=self.member_responsibility,
             explanation=dict(self.explanation),
             supersedes_id=self.supersedes_id,
+            deductible_applied=self.deductible_applied,
         )
 
     @classmethod
@@ -264,6 +266,7 @@ class AdjudicationDecisionModel(Base):
             outcome=d.outcome,
             payable_amount=d.payable_amount,
             member_responsibility=d.member_responsibility,
+            deductible_applied=d.deductible_applied,
             explanation=dict(d.explanation),
             supersedes_id=d.supersedes_id,
         )

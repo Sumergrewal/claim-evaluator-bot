@@ -175,6 +175,13 @@ class AdjudicationDecision:
     Re-decisions (manual override, dispute resolution) are written as
     new rows whose `supersedes_id` points at the previous current row.
     See `docs/decisions.md` for why decisions are append-only.
+
+    `deductible_applied` is the amount this decision contributed to
+    the member's annual deductible — the `deductible_taken` term from
+    the cost-sharing math. Stored explicitly so the cross-service-type
+    deductible accumulator query is a straight SQL sum rather than
+    parsing prior decisions' explanation JSON (see the 2026-06-24
+    phase-06 entry in `docs/decisions.md`).
     """
 
     id: str
@@ -186,6 +193,7 @@ class AdjudicationDecision:
     member_responsibility: Decimal
     explanation: dict[str, Any]
     supersedes_id: str | None = None
+    deductible_applied: Decimal = Decimal("0.00")
 
     def __post_init__(self) -> None:
         if self.payable_amount < 0:
@@ -197,6 +205,11 @@ class AdjudicationDecision:
             raise ValueError(
                 f"AdjudicationDecision {self.id}: member_responsibility must "
                 f"be non-negative (got {self.member_responsibility})"
+            )
+        if self.deductible_applied < 0:
+            raise ValueError(
+                f"AdjudicationDecision {self.id}: deductible_applied must be "
+                f"non-negative (got {self.deductible_applied})"
             )
 
 

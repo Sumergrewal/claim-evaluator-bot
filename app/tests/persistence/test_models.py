@@ -132,7 +132,9 @@ def test_claim_roundtrip_preserves_naive_utc_datetime(
     assert round_tripped.submitted_at.tzinfo is None
 
 
-def test_decision_roundtrip(session: Session, engine: Engine) -> None:
+def test_decision_roundtrip_preserves_deductible_applied(
+    session: Session, engine: Engine
+) -> None:
     now = datetime(2026, 6, 1)
     session.add(MemberModel.from_domain(Member(id="M1", name="A")))
     session.add(
@@ -167,9 +169,10 @@ def test_decision_roundtrip(session: Session, engine: Engine) -> None:
         decided_at=now,
         decided_by="system",
         outcome=DecisionOutcome.APPROVED,
-        payable_amount=Decimal("80.00"),
-        member_responsibility=Decimal("20.00"),
+        payable_amount=Decimal("55.00"),
+        member_responsibility=Decimal("45.00"),
         explanation={"steps": [{"phase": "coverage", "result": "pass"}]},
+        deductible_applied=Decimal("30.00"),
     )
     session.add(AdjudicationDecisionModel.from_domain(d))
     session.commit()
@@ -178,6 +181,7 @@ def test_decision_roundtrip(session: Session, engine: Engine) -> None:
         round_tripped = s.get(AdjudicationDecisionModel, "D1").to_domain()
     assert round_tripped == d
     assert isinstance(round_tripped.outcome, DecisionOutcome)
+    assert round_tripped.deductible_applied == Decimal("30.00")
 
 
 def test_dispute_and_audit_event_roundtrip(

@@ -134,6 +134,13 @@ that line item back through review. Every state change writes an
   - `outcome` — enum: `approved`, `denied`, `needs_review`.
   - `payable_amount` — Decimal.
   - `member_responsibility` — Decimal.
+  - `deductible_applied` — Decimal. The portion of this line item's
+    charge that contributed to the member's annual deductible (the
+    `deductible_taken` term in the cost-sharing math). Stored
+    explicitly so the member-scoped deductible accumulator is a
+    straight SQL sum — see the 2026-06-24 phase-06 entry in
+    `docs/decisions.md`. Always `0.00` on `denied` and `needs_review`
+    decisions.
   - `explanation` — JSON (see [Explanation format](#explanation-format)).
   - `supersedes_id` — FK → AdjudicationDecision (nullable). Set when
     this decision replaces an earlier one for the same line item.

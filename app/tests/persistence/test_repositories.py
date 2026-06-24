@@ -64,6 +64,8 @@ def _add_approved_physio(
     service_date: date,
     supersedes_id: str | None = None,
     outcome: DecisionOutcome = DecisionOutcome.APPROVED,
+    deductible_applied: Decimal = Decimal("0.00"),
+    service_type: str = "physio",
 ) -> None:
     session.add(
         ClaimModel.from_domain(
@@ -83,7 +85,7 @@ def _add_approved_physio(
             LineItem(
                 id=line_id,
                 claim_id=claim_id,
-                service_type="physio",
+                service_type=service_type,
                 service_description="x",
                 charged_amount=payable,
                 preauth_ref=None,
@@ -110,6 +112,7 @@ def _add_approved_physio(
                 else payable,
                 explanation={},
                 supersedes_id=supersedes_id,
+                deductible_applied=deductible_applied,
             )
         )
     )
@@ -296,6 +299,110 @@ def test_accumulator_exclude_line_item_drops_that_lines_history(
         exclude_line_item_id="L2",
     )
     assert total == Decimal("400.00")
+
+
+# --- Deductible accumulator (cross-service-type, member-scoped) -----------
+
+
+def test_sum_deductible_applied_aggregates_across_service_types(
+    session: Session,
+) -> None:
+    """The deductible accumulator is *not* scoped by service_type; the
+    limit accumulator is. A consult and a physio in the same year must
+    both contribute to the same member's deductible total.
+    """
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("0.00"), service_date=date(2026, 2, 1),
+        service_type="consult", deductible_applied=Decimal("300.00"),
+    )
+    _add_approved_physio(
+        session, claim_id="C2", line_id="L2", decision_id="D2",
+        payable=Decimal("0.00"), service_date=date(2026, 3, 1),
+        service_type="physio", deductible_applied=Decimal("200.00"),
+    )
+    session.commit()
+
+    total = repo.sum_deductible_applied(
+        session,
+        member_id="M1",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 12, 31),
+    )
+    assert total == Decimal("500.00")
+
+
+def test_sum_deductible_applied_ignores_superseded_decisions(
+    session: Session,
+) -> None:
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("0.00"), service_date=date(2026, 2, 1),
+        service_type="consult", deductible_applied=Decimal("400.00"),
+    )
+    # A reviewer denies the line item after the fact; the deductible
+    # the engine had applied is no longer current and must drop out.
+    session.add(
+        AdjudicationDecisionModel.from_domain(
+            AdjudicationDecision(
+                id="D1b",
+                line_item_id="L1",
+                decided_at=_NOW,
+                decided_by="reviewer:1",
+                outcome=DecisionOutcome.DENIED,
+                payable_amount=Decimal("0.00"),
+                member_responsibility=Decimal("400.00"),
+                explanation={},
+                supersedes_id="D1",
+                deductible_applied=Decimal("0.00"),
+            )
+        )
+    )
+    session.commit()
+
+    total = repo.sum_deductible_applied(
+        session,
+        member_id="M1",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 12, 31),
+    )
+    assert total == Decimal("0.00")
+
+
+def test_sum_deductible_applied_respects_period_and_exclude(
+    session: Session,
+) -> None:
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C1", line_id="L1", decision_id="D1",
+        payable=Decimal("0.00"), service_date=date(2026, 2, 1),
+        service_type="consult", deductible_applied=Decimal("300.00"),
+    )
+    _add_approved_physio(
+        session, claim_id="C2", line_id="L2", decision_id="D2",
+        payable=Decimal("0.00"), service_date=date(2025, 12, 1),
+        service_type="consult", deductible_applied=Decimal("999.00"),
+    )
+    session.commit()
+
+    in_year = repo.sum_deductible_applied(
+        session,
+        member_id="M1",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 12, 31),
+    )
+    assert in_year == Decimal("300.00")
+
+    excluding_l1 = repo.sum_deductible_applied(
+        session,
+        member_id="M1",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 12, 31),
+        exclude_line_item_id="L1",
+    )
+    assert excluding_l1 == Decimal("0.00")
 
 
 # --- Derived amounts on line items ----------------------------------------
