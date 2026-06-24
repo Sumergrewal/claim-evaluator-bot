@@ -1,12 +1,102 @@
 # Decisions
 
-A running log of non-trivial decisions made during the build. Each entry
-captures the **context**, the **options considered**, the **choice**, and
-the **reasoning**. Append-only during the project; do not edit past
-entries.
+What was built, what was skipped, and why. Each dated entry below
+captures **context**, **options considered**, **choice**, and
+**reasoning** for a non-trivial call made during the build.
 
-This doc is the single source of truth a new chat should read to catch
-up on "where we are and why."
+---
+
+## Summary
+
+### What shipped
+
+| Layer | Delivered |
+|---|---|
+| **Backend** | Python 3.11+, FastAPI, SQLAlchemy 2.x, SQLite. Pure domain layer (`app/domain/`), rules engine (`app/adjudication/`), persistence + YAML seed loader (`app/persistence/`), REST API (`app/api/`). |
+| **Frontend** | **QuickClaim** — Vite + React + TypeScript SPA: claims list (member filter), claim drill-down (line items, coverage decisions, audit timeline), submit form. |
+| **Data** | Three members, three policies (32 coverage rules), 13 curated seed claims in `data/*.yaml`. DB file is gitignored; auto-seeds on first launch. |
+| **Tests** | ~197 pytest (domain, persistence, engine, API, scripts) + 29 Vitest (formatters, API client, component smoke tests). Tests land in the same commit as the code they cover. |
+| **Tooling** | `uv` + lockfile, `reset_db` CLI, raw Cursor JSONL logs in `ai-artifacts/`. |
+
+### Application flow (logic)
+
+```text
+Startup (lifespan)
+  ├─ create_all()          — SQLite schema from ORM models
+  ├─ seed_if_empty()       — load data/*.yaml when policies table is empty
+  └─ adjudicate_all_pending() — decide every pending line item before HTTP serves
+       (order: claim.submitted_at, then line_item.id)
+
+GET /api/claims[?member_id=]
+  └─ derive claim.adjudication_state from line items + paid_at; roll up money
+
+GET /api/claims/{id}
+  └─ line items + current AdjudicationDecision (explanation JSON) + merged audit timeline
+
+POST /api/claims
+  ├─ validate member exists (else 404)
+  ├─ insert claim + line items (status: pending)
+  ├─ audit: claim.submitted
+  └─ for each line item in submission order:
+       adjudicate_line_item()
+         ├─ load active policy for claim.service_date
+         ├─ engine: eligibility → coverage → gates → deductible → limits → cost-sharing
+         ├─ insert AdjudicationDecision (immutable; supersedes_id chain for re-decisions)
+         ├─ audit: line_item.decided
+         └─ line item status mirrors decision outcome
+  └─ return ClaimDetailOut (201) — including eligibility denials, not HTTP 422
+
+GET /api/coverage-rules
+  └─ rule catalog for denial tooltips (frontend joins rule_id → plain-English description)
+
+reset_db CLI
+  └─ drop tables → create_all → re-seed → adjudicate_all_pending (same end state as startup)
+```
+
+Per-line-item engine behaviour, cost-sharing math, and explanation shape
+are specified in [`domain-model.md`](domain-model.md). Claim
+`adjudication_state` is **derived** at read time from line items; only
+`paid_at` is stored as a claim-level status marker.
+
+### Built vs skipped
+
+| Shipped | Not shipped (documented / deferred) |
+|---|---|
+| System adjudication of pending line items | Dispute filing, reviewer override UI, mark-claim-paid API |
+| Structured per-phase explanations on every decision | Auth, pagination, email, admin panels |
+| Audit log (claim submit + line item decided) | Visit-count limits, OOPM, plan-year / rolling limit periods |
+| Submit + list + drill-down UI with rule tooltips | Provider / Preauthorization as first-class entities |
+| `Dispute` entity + ORM (forward-compatible schema) | Post-payment dispute / claim reopen |
+| Seed `paid_at` on two claims for demo of `paid` state | Alembic migrations (throwaway DB + `reset_db`) |
+
+Full deferral reasoning lives in the dated entries below and in
+`domain-model.md` § Explicitly deferred.
+
+### Assumptions
+
+- **One active policy per member per `service_date`.** No overlapping
+  policy windows; the engine picks the policy active on the claim's
+  service date.
+- **Calendar year is the only supported limit period.** `annual_limit`
+  rules carry `period: "calendar_year"`; other period kinds are schema-ready
+  but rejected by the engine.
+- **Deductible is member-scoped across all service types; limits are
+  service-type-scoped.** See the 2026-06-24 deductible-accumulator entry.
+- **Line items process in submission order** within a claim, and the
+  startup batch uses `(claim.submitted_at, line_item.id)` across claims so
+  accumulator math is deterministic.
+- **Disputes occur before payment.** `paid_at` is set only on seed data
+  for demo; there is no HTTP route to mark a claim paid or reopen one.
+- **Human-only resolution for `needs_review`.** The engine writes
+  `decided_by = "system"`; gate failures and disputes stay in review until
+  a reviewer writes a superseding decision (no reviewer API in this build).
+- **Out-of-scope per spec:** auth, enrollment, member/provider account
+  management, notifications, analytics, multi-tenancy.
+- **Naive UTC datetimes** throughout — SQLite strips `tzinfo` on
+  round-trip; all `datetime` fields are treated as UTC.
+- **Synchronous submit:** `POST /api/claims` creates the claim and
+  adjudicates every line item in the same request/transaction before
+  returning.
 
 ---
 
@@ -964,9 +1054,9 @@ as something other than `PENDING` first (or use a dedicated
 reviewer endpoint that supersedes explicitly) makes the
 provenance of every decision row obvious from its actor field.
 
-The dispute/review flow itself is out of scope for this
-take-home; this contract documents what the engine *won't* do so
-the eventual reviewer flow knows where its boundary is.
+The dispute/review flow itself was not built in this submission; the
+engine contract documents what the engine *won't* do so a future
+reviewer flow knows where its boundary is.
 
 **Why bundle these four?** They're the small implementation
 decisions that didn't need pre-flight discussion but matter for
@@ -1218,8 +1308,7 @@ routes were wired.
 **Reasoning:** one file per resource keeps handlers easy to find and
 matches the repo layout described in planning. Hello was scaffolding
 to prove CORS; keeping it would clutter OpenAPI and confuse the
-reviewer about which endpoints are real. The frontend still calls it
-until phase 08 rewrites the UI.
+reviewer about which endpoints are real.
 
 **Sub-decision J — API tests use in-memory SQLite with `StaticPool`.**
 
@@ -1234,10 +1323,10 @@ a single connection so seed data and route handlers see the same DB.
 Skipping the production lifespan avoids double-seeding against the
 real `claims.db` file on disk.
 
-**Deferred (no routes in phase 07):** disputes, reviewer overrides,
+**Not shipped (no HTTP routes):** disputes, reviewer overrides,
 marking a claim paid (`paid_at`), pagination, auth. The engine and
-domain model know about some of these; the HTTP layer does not expose
-them yet.
+domain model support some of these; the REST layer does not expose
+them.
 
 ---
 
@@ -1288,9 +1377,8 @@ undecided line items.
 
 ## 2026-06-24 — Phase 08 frontend: QuickClaim SPA
 
-**Context:** Phase 07 delivered the HTTP contract. Phase 08 replaces
-the phase-04 hello-world stub (`GET /api/hello`, removed in phase 07)
-with a working UI the reviewer can click through.
+**Context:** Phase 07 delivered the HTTP contract. Phase 08 replaced
+the phase-04 hello-world stub with a working UI.
 
 **Choice:** **QuickClaim** — a Vite + React + TypeScript SPA with
 React Router:
@@ -1311,8 +1399,8 @@ of "review" / "coverage decision" for readability.
 
 - One fetch per screen where the API already denormalizes enough for
   first paint (member names on claim rows, audit embedded on detail).
-- No auth, disputes, or reviewer flows — matches phase 07 deferred
-  list; tagline states system-only review.
+- No auth, disputes, or reviewer flows — matches the not-shipped list
+  from phase 07; tagline states system-only review.
 - Header layout: **QuickClaim** brand dominant; nav tabs (Claims,
   Submit claim) top-right on the same row.
 
@@ -1353,13 +1441,12 @@ with `policy_name`, `kind`, `parameters`, plus server-generated
 
 ## 2026-06-24 — Frontend unit tests: Vitest + Testing Library
 
-**Context:** Backend has ~196 pytest cases across domain, persistence,
-engine, and API. The stack decision listed Vitest + RTL "if time
-permits." Phase 09 is the formal test pass; phase 08 landed an initial
-frontend suite so utils and API glue are not untested.
+**Context:** Backend has ~197 pytest cases across domain, persistence,
+engine, API, and scripts. The stack decision listed Vitest + RTL "if
+time permits."
 
 **Choice:** Vitest with jsdom, `@testing-library/react`, and
-`npm test` / `npm test:watch`. Initial coverage (29 tests):
+`npm test` / `npm test:watch`. Coverage (29 tests):
 
 - `utils/format`, `utils/labels` — pure helpers
 - `api/client` — fetch URLs, `ApiError`, 404/422 bodies (mocked
@@ -1367,24 +1454,106 @@ frontend suite so utils and API glue are not untested.
 - `StatusBadge`, `Money`, `AuditTimeline` — component smoke tests
 
 Page-level flows (`ClaimsListPage`, submit form, `RulesContext`) and
-coverage-rules route HTTP tests deferred to phase 09.
+coverage-rules route HTTP tests were left out — backend coverage is
+the primary bar; frontend tests target helpers and components most
+likely to break during copy or formatting tweaks.
 
-**Reasoning:** Tests the behaviour a reviewer is most likely to break
-when tweaking copy or formatting. Page/integration tests cost more setup
-for diminishing return in a take-home with strong backend coverage.
+**Reasoning:** Behaviour-named backend tests encode domain rules; the
+frontend suite guards the thin client layer without duplicating engine
+coverage in the browser.
 
 ---
 
-<!--
-Future entries below. Format:
+## 2026-06-24 — Dispute entity modeled; filing and resolution not shipped
 
-## YYYY-MM-DD — <short title>
+**Context:** The domain model includes a full `Dispute` entity (fields,
+invariants, state-machine transitions back to `needs_review`). The ORM
+model and domain dataclass round-trip in tests. No dispute appears in
+seed YAML, no repository helpers are wired into routes, and the
+QuickClaim UI has no file-or-resolve flow.
 
-**Context:** ...
+**Options considered:**
 
-**Options considered:** ...
+- **Remove `Dispute` from the schema** until a dispute API is built.
+  Smaller DB, but drops the forward-compatible shape and forces a
+  migration if disputes land later.
+- **Keep the entity in domain + persistence; defer the flow** (chosen).
+  Document the gap explicitly so the model doc and the running app
+  don't read as the same thing.
 
-**Choice:** ...
+**Choice:** Entity and table exist; the end-to-end dispute flow is not
+shipped. The human-only resolution contract (2026-06-23 entry) still
+applies: filing would move a line item to `needs_review`; resolving
+would write a superseding `AdjudicationDecision` with
+`decided_by = "reviewer:<id>"`.
 
-**Reasoning:** ...
--->
+**Reasoning:** Modeling disputes in the domain shows the lifecycle was
+thought through — claim state derivation already accounts for
+`needs_review` from disputes — without spending build time on API and
+UI the rubric marks out of scope. A reviewer inspecting `DisputeModel`
+should treat it as schema readiness, not a feature they can click
+through.
+
+---
+
+## 2026-06-24 — `reset_db` runs the same adjudication batch as app startup
+
+**Context:** QA found that `uv run python -m app.scripts.reset_db` left
+every seed line item in `pending`. The app lifespan calls
+`adjudicate_all_pending` after seeding, but the CLI only dropped,
+recreated, and re-seeded — so claims showed **Submitted** with $0 totals
+until the dev server restarted.
+
+**Options considered:**
+
+- **Document "restart the server after reset."** Works but hides the
+  bug behind an extra step every reviewer would hit.
+- **Call `adjudicate_all_pending` at the end of `reset_db`** (chosen).
+  Same function, same ordering, same end state as a fresh startup.
+
+**Choice:** After `load_seed_data`, `reset_db` opens a session and runs
+`adjudicate_all_pending` before commit. A test in
+`app/tests/scripts/test_reset_db.py` asserts no pending line items
+remain.
+
+**Reasoning:** Reset is the "start over" path; it should land the DB
+in the same reviewable state as first boot, not an intermediate state
+only the lifespan fixes. Sharing one function avoids the two paths
+drifting apart again.
+
+---
+
+## 2026-06-24 — Deductible accumulator is member-scoped and cross-service-type
+
+**Context:** `Policy.annual_deductible` is a single dollar cap per
+member per calendar year, not per service type. A member's MRI and
+their physio visit both draw from the same deductible pool. Annual
+*limits* (`annual_limit` rules), by contrast, are scoped to
+`(member, service_type, period)` and sum `payable_amount`.
+
+Phase 06 added `deductible_applied` on each `AdjudicationDecision`
+because `payable_amount` alone cannot recover how much of a prior line
+item went toward the deductible (it bundles deductible, cost-share, and
+over-limit into one number).
+
+**Options considered:**
+
+- **Service-type-scoped deductible.** Simpler queries, but wrong for
+  the seeded policies and typical US plan shape.
+- **Member-scoped, cross-service-type sum of `deductible_applied`**
+  (chosen). Repo function `sum_deductible_applied` filters by member
+  and calendar-year window on `claim.service_date`, not by
+  `service_type`.
+
+**Choice:** Deductible accumulator = sum of `deductible_applied` over
+current approved decisions for the member in the period. Limit
+accumulator = sum of `payable_amount` over current approved decisions
+for the member **and** service type in the period.
+
+**Reasoning:** Keeps the two accumulators aligned with what each rule
+kind actually caps. Cross-claim ordering
+`(claim.submitted_at, line_item.id)` matters here: Bob's seed claims
+show deductible filling on an early claim and coinsurance on a later
+one even when the service types differ. Documented in
+`domain-model.md` invariants alongside the limit accumulator.
+

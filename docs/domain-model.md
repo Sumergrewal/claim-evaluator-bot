@@ -1,12 +1,9 @@
 # Domain Model
 
-> **Status:** planning-phase draft. The shape below is what we'll
-> implement against; it will evolve as we run into edge cases during
-> coding. Historical decisions and rejected alternatives live in
-> `decisions.md`.
-
-This document captures the entities, relationships, state machines, and
-invariants of the claims-processing domain.
+Entities, relationships, state machines, and invariants of the
+claims-processing domain **as implemented** in this submission.
+Design choices, application flow, and trade-offs live in
+[`decisions.md`](decisions.md).
 
 ---
 
@@ -18,10 +15,56 @@ cost-sharing applies. The member submits **Claims**, each containing one
 or more **LineItems** (individual billable services). The system
 **adjudicates** each line item against the policy's rules, producing an
 **AdjudicationDecision** with a structured **Explanation**. A claim's
-overall status is derived from the states of its line items. Members
-can file **Disputes** against specific line item decisions, which loops
-that line item back through review. Every state change writes an
-**AuditEvent**.
+overall status is derived from the states of its line items. Every
+adjudication and submission writes an **AuditEvent**.
+
+The domain also models **Disputes** (a member challenging a line-item
+decision), but the filing and resolution flow is **not shipped** — see
+[Implementation status](#implementation-status) and
+[`decisions.md`](decisions.md).
+
+---
+
+## Design rationale
+
+Why this decomposition:
+
+- **Line item is the adjudication unit.** Coverage rules, limits, and
+  cost-sharing attach to `service_type`s and dollar amounts that live on
+  line items. A claim is a container; mixing adjudication at claim level
+  would blur per-service rule application and make partial approvals
+  awkward.
+- **Claim state is derived, not stored.** Line items are the source of
+  truth; storing claim-level adjudication state risks drift. The only
+  persisted claim marker is `paid_at` (payment issued), which is an
+  external event line items cannot express.
+- **Coverage rules are composable data rows.** Real policies stack
+  coverage + limits + cost-sharing on the same service. One row per
+  concern keeps rules editable in YAML without code changes and lets the
+  same engine serve different policies.
+- **Decisions are immutable; re-decisions supersede.** A decision is
+  something the member was once shown. Append-only history plus
+  `supersedes_id` keeps accumulators honest when a later decision
+  overturns an earlier one.
+- **Explanations mirror the engine pipeline.** Each phase contributes a
+  step (rule fired, inputs checked, amount math). The UI drill-down and
+  the API wire format are the same structure.
+
+---
+
+## Implementation status
+
+| Area | Status |
+|---|---|
+| Member, Policy, CoverageRule, Claim, LineItem | **Shipped** — seeded from `data/*.yaml`, exposed via REST |
+| AdjudicationDecision + six-phase engine | **Shipped** — system adjudicates on startup and on `POST /api/claims` |
+| AuditEvent (`claim.submitted`, `line_item.decided`) | **Shipped** — embedded on claim drill-down + dedicated audit routes |
+| Claim `adjudication_state` derivation + `paid_at` guard | **Shipped** — `paid` only when base state is payable and `paid_at` is set |
+| QuickClaim UI (list, detail, submit, rule tooltips) | **Shipped** — `GET /api/coverage-rules` for denial tooltips |
+| `Dispute` entity + ORM table | **Modeled, not exposed** — schema and round-trip tests exist; no seed data, routes, or UI |
+| Dispute filing / reviewer override | **Not shipped** — state machines document the intended flow |
+| Mark claim paid (`paid_at` via API) | **Not shipped** — two seed claims carry `paid_at` for demo only |
+| Auth, pagination, Alembic migrations | **Not shipped** — see [Explicitly deferred](#explicitly-deferred-not-built-in-this-submission) |
 
 ---
 
@@ -44,8 +87,8 @@ that line item back through review. Every state change writes an
   - `member_id` (FK → Member).
   - `name` — e.g. "Standard Health 2026".
   - `effective_date` — date.
-  - `termination_date` — date (nullable for open-ended policies; we'll
-    seed all policies with explicit end dates).
+  - `termination_date` — date (nullable for open-ended policies; all
+    seeded policies have explicit end dates).
   - `annual_deductible` — Decimal.
 - **Relationships:** belongs to one `Member`, has many `CoverageRule`.
 - **Invariants:**
@@ -92,8 +135,11 @@ that line item back through review. Every state change writes an
 - **Derived:** `adjudication_state` is computed from line items at read
   time (see [Claim lifecycle](#claim-lifecycle)).
 - **Invariants:**
-  - `service_date` must fall inside the chosen policy's
-    `[effective_date, termination_date]`.
+  - When an active policy exists on `service_date`, it must cover that
+    date (`effective_date <= service_date <= termination_date`). When
+    no policy is active, the engine's eligibility phase writes a
+    `denied` decision — `POST /api/claims` still returns 201; the
+    denial is an adjudication outcome, not an HTTP validation error.
   - `paid_at` may only be set when `adjudication_state ∈ {approved,
     partially_approved}`.
 
@@ -138,9 +184,8 @@ that line item back through review. Every state change writes an
     charge that contributed to the member's annual deductible (the
     `deductible_taken` term in the cost-sharing math). Stored
     explicitly so the member-scoped deductible accumulator is a
-    straight SQL sum — see the 2026-06-24 phase-06 entry in
-    `docs/decisions.md`. Always `0.00` on `denied` and `needs_review`
-    decisions.
+    straight SQL sum — see `decisions.md`. Always `0.00` on `denied`
+    and `needs_review` decisions.
   - `explanation` — JSON (see [Explanation format](#explanation-format)).
   - `supersedes_id` — FK → AdjudicationDecision (nullable). Set when
     this decision replaces an earlier one for the same line item.
@@ -154,6 +199,11 @@ that line item back through review. Every state change writes an
     `member_responsibility` mirror the current decision.
 
 ### Dispute
+
+> **Not shipped.** The `Dispute` entity and ORM model exist for
+> forward-compatible schema; no dispute rows are seeded and no API or
+> UI implements filing or resolution. The spec below is the intended
+> behaviour when the flow is built.
 
 - **Purpose:** a member's challenge to a specific line item decision.
 - **Fields:**
@@ -178,9 +228,10 @@ that line item back through review. Every state change writes an
   it is.
 - **Fields:**
   - `id` (PK).
-  - `event_type` — string (e.g. `claim.submitted`,
-    `line_item.decided`, `line_item.state_changed`, `dispute.filed`,
-    `dispute.resolved`, `claim.paid`).
+  - `event_type` — string. **Written in this build:** `claim.submitted`,
+    `line_item.decided`. **Spec only (not emitted yet):**
+    `line_item.state_changed`, `dispute.filed`, `dispute.resolved`,
+    `claim.paid`.
   - `entity_type` — string (`claim`, `line_item`, `dispute`).
   - `entity_id` — string.
   - `actor` — string (`system`, `member`, `reviewer:<id>`).
@@ -188,10 +239,17 @@ that line item back through review. Every state change writes an
   - `payload` — JSON (before/after state, decision id, etc.).
 - **Invariants:** never updated, never deleted.
 
-> **Accumulators are not an entity.** They are computed on demand by
-> summing the `payable_amount` of the current approved
-> `AdjudicationDecision`s scoped to a `(member, service_type, period)`.
-> See `decisions.md` for the trade-off.
+> **Accumulators are not an entity.** Two on-demand sums drive the
+> engine — no `Accumulator` table:
+>
+> - **Limit accumulator** (service-type-scoped): sum of `payable_amount`
+>   over current approved decisions for `(member, service_type, period)`.
+> - **Deductible accumulator** (member-scoped, cross-service-type): sum
+>   of `deductible_applied` over current approved decisions for
+>   `(member, period)`.
+>
+> See `decisions.md` for why these are computed on demand rather than
+> stored.
 
 ---
 
@@ -237,12 +295,13 @@ Notes:
 - **Partial coverage is `approved`, not its own state.** A line item
   charged $150 with a $80 payable amount (the rest hit a cap) is
   `approved`, with the explanation carrying the "why only $80."
-- A dispute always lands the line item back in `needs_review`.
+- A dispute always lands the line item back in `needs_review` *(spec;
+  flow not shipped)*.
 - **`needs_review` is only ever cleared by a human reviewer.** The
-  engine never auto-resolves `needs_review` — not from gate failures,
-  not from disputes. The reviewer's decision is written as a new
-  `AdjudicationDecision` with `decided_by = "reviewer:<id>"` and a
-  `supersedes_id` pointing at the previous current decision (if any).
+  shipped engine never auto-resolves `needs_review` — gate failures stay
+  in review until a reviewer writes a superseding decision. The
+  intended contract: `decided_by = "reviewer:<id>"` with
+  `supersedes_id` pointing at the previous current decision.
 
 ### Claim lifecycle
 
@@ -274,10 +333,9 @@ Notes:
 
 - `paid` can only be entered from `approved` or `partially_approved` —
   never from `denied` or `under_review`.
-- A dispute filed after `paid` is **out of scope for this take-home**;
-  we assume disputes occur before payment. If we changed that, the
-  derivation would need to distinguish "paid and now reopened" from
-  "paid and final."
+- Dispute transitions in the diagram above are **spec only** — not
+  reachable in the running app. Disputes are assumed to occur before
+  payment; post-payment reopen is not built.
 
 ---
 
@@ -290,15 +348,14 @@ Notes:
 | `service_covered` | `{}` | Marks the service type as covered. Required for any payment. | coverage |
 | `service_excluded` | `{}` | Explicit exclusion. Short-circuits to `denied`. | coverage |
 | `preauth_required` | `{}` | Line item must have a non-null `preauth_ref`, else `needs_review`. | gates |
-| `annual_limit` | `{"cap_amount": Decimal, "period": "calendar_year"}` | Plan-paid total for this service type per period is capped. Overage is member's. `period` is fixed at `"calendar_year"` for now. | limits |
+| `annual_limit` | `{"cap_amount": Decimal, "period": "calendar_year"}` | Plan-paid total for this service type per period is capped. Overage is member's. `period` must be `"calendar_year"` in this build. | limits |
 | `copay` | `{"amount": Decimal}` | Flat per-visit member share. | cost-sharing |
 | `coinsurance` | `{"member_pct": int}` | % of post-deductible amount the member pays. | cost-sharing |
 
 `service_type` is always on the rule itself, not in `parameters`. The
-`period` field on `annual_limit` is kept in the schema but only the
-value `"calendar_year"` is accepted by the engine at the moment — see
-`decisions.md` for the rationale and the things this defers (plan
-year, rolling 12-month, visit counts).
+`period` field on `annual_limit` is kept in the schema; the engine
+accepts only `"calendar_year"` — see `decisions.md` for deferred period
+kinds (plan year, rolling 12-month, visit counts).
 
 ### Evaluation pipeline
 
@@ -315,10 +372,9 @@ modifies the running amounts.
 | 5 | **limits** | matching `annual_limit` + accumulator lookup | `coverable = min(post_deductible, limit_remaining)`; the excess is over-limit member-pay |
 | 6 | **cost-sharing** | matching `copay` / `coinsurance` rule | computes `plan_pays` and `member_share` on the coverable amount |
 
-Deductible runs *before* limits — this matches the cost-sharing math
+Deductible runs before limits — this matches the cost-sharing math
 formula below and the "Cost-sharing precedence" entry in
-`docs/decisions.md`. The two were soft-mismatched in an earlier draft
-of this table; that's now fixed.
+`docs/decisions.md`.
 
 Each phase that fires contributes a step to the line item's
 explanation. The order is fixed by the engine, not by the rule rows —
@@ -350,9 +406,11 @@ Rules that govern this math:
   do not enter the cost-sharing rule. Crucially, **over-limit amounts
   do not count toward the deductible** — they're uncovered, so they
   cannot help the member fill a plan-defined deductible.
-- **Line items are processed in claim-submission order.** This is the
-  deterministic order so accumulator updates from earlier items are
-  visible to later ones in the same claim.
+- **Line items within a claim process in submission order** so
+  accumulator updates from earlier items are visible to later ones.
+- **Across claims**, the startup batch and synchronous submit path use
+  `(claim.submitted_at, line_item.id)` so cross-claim accumulator math
+  is deterministic.
 - **All money is `Decimal`.** Two-place rounding (banker's rounding)
   applied at each step to keep `plan_pays + member_pays = charged` to
   the cent.
@@ -391,7 +449,7 @@ the gate step has `result: "needs_review"` and `terminating: true`.
 
 ## Invariants
 
-System-wide invariants the engine and persistence layer must uphold.
+System-wide invariants the engine and persistence layer uphold.
 
 1. **A line item's amounts always sum to its charge.**
    `payable_amount + member_responsibility == charged_amount`.
@@ -401,34 +459,34 @@ System-wide invariants the engine and persistence layer must uphold.
    inserting a new row that supersedes the previous current one.
 4. **Exactly one current decision per line item** (a row not pointed
    to by any other row's `supersedes_id`).
-5. **Accumulator value at time T** = sum of `payable_amount` over all
-   current `AdjudicationDecision` rows where outcome is `approved`,
-   the line item's `service_type` matches the rule's `service_type`,
-   and the claim's `service_date` falls in the rule's period and is
-   strictly before T.
-6. **`paid_at` only set when adjudication state is `approved` or
-   `partially_approved`.** Denied claims are never paid.
-7. **Every state-changing operation writes an `AuditEvent`** before
+5. **Limit accumulator at time T** = sum of `payable_amount` over all
+   current `AdjudicationDecision` rows where outcome is `approved`, the
+   line item's `service_type` matches the rule's `service_type`, and the
+   claim's `service_date` falls in the rule's period and is strictly
+   before T.
+6. **Deductible accumulator at time T** = sum of `deductible_applied`
+   over all current `AdjudicationDecision` rows where outcome is
+   `approved`, scoped to the **member** (all service types) and the
+   calendar-year window anchored on each claim's `service_date`, with
+   claims strictly before T. Member-scoped, not service-type-scoped.
+7. **`paid_at` only set when adjudication state is `approved` or
+   `partially_approved`.** Denied claims are never paid. Derivation also
+   requires a payable base state before `paid_at` elevates to `paid`.
+8. **Every state-changing operation writes an `AuditEvent`** before
    the transaction commits.
 
 ---
 
-## Open questions
+## Explicitly deferred (not built in this submission)
 
-None at the moment — the planning-stage questions have been resolved
-in `decisions.md`. New questions go here as they come up during
-implementation, and move to `decisions.md` once answered.
-
----
-
-## Explicitly deferred (out of scope for the take-home)
-
-These were considered, deliberately *not* built, and tracked so the
+These were considered, deliberately not built, and tracked so the
 reviewer can see they were thought about. Full reasoning in
 `decisions.md`.
 
 | Item | Current handling | What we'd do if we built it |
 |---|---|---|
+| Dispute filing and resolution | `Dispute` entity + ORM exist; no seed, API, or UI | Routes to file/resolve; line item → `needs_review`; reviewer writes superseding decision |
+| Mark claim paid | `paid_at` on two seed claims only; no HTTP route | `POST` or patch to set `paid_at` when base state is payable; `claim.paid` audit event |
 | Limit periods other than calendar year (plan year, rolling 12-month) | Engine accepts only `period: "calendar_year"` on `annual_limit` rules | Generalise the period-to-date-range function; everything else stays the same |
 | Visit-count limits (e.g. "20 physio visits/year") | Not modelled | New rule kind `visit_count_limit` with the same shape as `annual_limit` but counting line items instead of summing dollars |
 | Preauthorization as a first-class entity | String `preauth_ref` on `LineItem`; presence is the only thing checked | Promote to a `Preauthorization` entity with issuance date, expiry, scope; the gate phase looks up by reference and checks validity |

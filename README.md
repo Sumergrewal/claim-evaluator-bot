@@ -9,18 +9,19 @@ for the reasoning behind every non-trivial choice.
 
 ## Status
 
-**Backend** (phases 05–07): domain model, SQLite persistence, YAML seed
-data, six-phase rules engine, REST API.
+Runnable end-to-end: **QuickClaim** UI + FastAPI backend + six-phase
+rules engine. On first launch the backend seeds from `data/*.yaml` and
+reviews every pending line item before serving HTTP requests.
 
-**Frontend** (phase 08): **QuickClaim** — a React SPA for listing and
-filtering claims, drilling into line-item decisions and audit history,
-and submitting new claims.
+| Layer | Delivered |
+|---|---|
+| Backend | Domain model, SQLite persistence, YAML seed, rules engine, REST API |
+| Frontend | Claims list (member filter), claim drill-down, submit form, rule tooltips |
+| Tests | 197 pytest + 29 Vitest |
+| Docs | [`domain-model.md`](docs/domain-model.md), [`decisions.md`](docs/decisions.md) — [`self-review.md`](docs/self-review.md) in progress |
 
-On first launch the backend seeds from `data/*.yaml` and reviews every
-pending line item before serving HTTP requests.
-
-See the [phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker) for
-progress. Phases 09–11 (test polish, docs, QA) are still in progress.
+See [`docs/decisions.md`](docs/decisions.md) for application flow, built
+vs skipped, and assumptions.
 
 ## Stack
 
@@ -70,38 +71,54 @@ claim-evaluator-bot/
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - Node.js ≥ 20 and `npm`
 
-## Setup
+## Quick start
+
+From a fresh clone — **run all commands from the repo root** unless
+noted.
 
 ```bash
 git clone <this-repo>
 cd claim-evaluator-bot
 
-# Backend
+# 1. Install dependencies
 uv sync
+cd frontend && npm install && cd ..
 
-# Frontend
-cd frontend
-npm install
-cd ..
-```
-
-## Running
-
-Start the backend from the **repo root**, then the frontend in a second
-terminal.
-
-```bash
-# Terminal 1 — API at http://localhost:8000
+# 2. Terminal 1 — API at http://localhost:8000
 uv run uvicorn app.main:app --reload
 
-# Terminal 2 — QuickClaim UI at http://localhost:5173
+# 3. Terminal 2 — QuickClaim UI at http://localhost:5173
 cd frontend
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) for the UI, or
-[http://localhost:8000/docs](http://localhost:8000/docs) for interactive
-API docs (Swagger).
+Open [http://localhost:5173](http://localhost:5173). The first backend
+start creates `claims.db` in the repo root, loads seed data, and
+adjudicates every pending line item before accepting HTTP traffic.
+
+**Sanity check** (with the backend running):
+
+```bash
+curl -s http://localhost:8000/api/members | head -c 80
+# → JSON array of 3 members
+
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/api/claims
+# → 200
+```
+
+Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+## Setup
+
+Same as step 1 above if you already cloned:
+
+```bash
+uv sync
+
+cd frontend
+npm install
+cd ..
+```
 
 ### QuickClaim UI
 
@@ -185,7 +202,7 @@ place.
 ## Running tests
 
 ```bash
-# Backend — from repo root (~196 tests)
+# Backend — from repo root (197 tests)
 uv run pytest
 
 # Frontend — from frontend/ (29 tests)
@@ -194,6 +211,16 @@ npm test
 ```
 
 Other frontend scripts: `npm run lint`, `npm run build`.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| UI shows "Make sure the backend is running…" | Start terminal 1 from the **repo root**: `uv run uvicorn app.main:app --reload` |
+| `database is locked` on `reset_db` | Stop the dev server first, then run reset, then restart |
+| `ModuleNotFoundError: app` | You are not in the repo root — `pyproject.toml` and `app/` must be in the cwd |
+| Empty claims list after reset | Use `uv run python -m app.scripts.reset_db` (not raw `rm claims.db` alone) — reset re-seeds **and** adjudicates pending line items |
+| Frontend cannot reach API | Default API URL is `http://localhost:8000`; override with `VITE_API_BASE` when starting Vite |
 
 ## Documentation
 
