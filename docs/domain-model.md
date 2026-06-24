@@ -308,9 +308,14 @@ modifies the running amounts.
 | 1 | **eligibility** | active policy on `service_date` | pass / `denied` |
 | 2 | **coverage** | matching `service_covered` / `service_excluded` rules | pass / `denied` |
 | 3 | **gates** | matching `preauth_required` + `line_item.preauth_ref` | pass / `needs_review` |
-| 4 | **limits** | matching `annual_limit` + accumulator lookup | pass with `coverable = min(charged, limit_remaining)` |
-| 5 | **deductible** | policy's `annual_deductible` + deductible accumulator | subtracts `deductible_taken` from the coverable amount |
-| 6 | **cost-sharing** | matching `copay` / `coinsurance` rule | computes `plan_pays` and `member_share` on what's left |
+| 4 | **deductible** | policy's `annual_deductible` + deductible accumulator | `deductible_taken = min(charged, deductible_remaining)`; `post_deductible = charged - deductible_taken` |
+| 5 | **limits** | matching `annual_limit` + accumulator lookup | `coverable = min(post_deductible, limit_remaining)`; the excess is over-limit member-pay |
+| 6 | **cost-sharing** | matching `copay` / `coinsurance` rule | computes `plan_pays` and `member_share` on the coverable amount |
+
+Deductible runs *before* limits — this matches the cost-sharing math
+formula below and the "Cost-sharing precedence" entry in
+`docs/decisions.md`. The two were soft-mismatched in an earlier draft
+of this table; that's now fixed.
 
 Each phase that fires contributes a step to the line item's
 explanation. The order is fixed by the engine, not by the rule rows —
@@ -367,8 +372,8 @@ shape below. The frontend renders the `narrative` for humans; the
     {"phase": "eligibility",   "rule_id": null,  "result": "pass",    "note": "Policy POL-SH2026 active on 2026-06-23"},
     {"phase": "coverage",      "rule_id": "R1a", "result": "pass",    "note": "general_consultation is covered"},
     {"phase": "gates",         "rule_id": null,  "result": "pass",    "note": "no gates apply"},
-    {"phase": "limits",        "rule_id": null,  "result": "pass",    "note": "no annual limit on general_consultation"},
     {"phase": "deductible",    "rule_id": null,  "result": "applied", "amount": "30.00", "note": "applied remaining $30 of annual deductible"},
+    {"phase": "limits",        "rule_id": null,  "result": "pass",    "note": "no annual limit on general_consultation"},
     {"phase": "cost_sharing",  "rule_id": "R1b", "result": "applied", "amount": "25.00", "note": "flat $25 copay"}
   ],
   "narrative": "Covered under General Consultation. Applied remaining $30 deductible and $25 visit copay. Plan pays $65 of $120 charged."

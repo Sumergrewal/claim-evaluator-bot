@@ -759,6 +759,110 @@ instead of eight disconnected fragments.
 
 ---
 
+## 2026-06-24 — Phase 06 engine pre-flight: deductible before limits, eligibility as a real phase, `deductible_applied` stored on `AdjudicationDecision`
+
+**Context:** With the engine being built in phase 06, three open
+questions surfaced while re-reading the planning docs and the
+domain rules together: (a) the *Evaluation pipeline* table in
+`docs/domain-model.md` had `limits` (phase 4) before `deductible`
+(phase 5), but the "Cost-sharing precedence" entry above and the
+cost-sharing math formula
+(`coverable = min(post_deductible, limit_remaining)`) both have
+deductible eating first; (b) the engine's task description in the
+phase-06 chat did not mention eligibility, but the domain spec
+listed it as phase 1 and the `Claim` invariant requires
+`service_date` to fall inside the active policy's window; (c) the
+deductible accumulator is member-scoped and cross-service-type, but
+the existing accumulator query (`sum_payable_for_accumulator`) is
+service-type-scoped and operates on `payable_amount` — and
+`payable_amount` is not enough to recover `deductible_taken` for
+prior decisions (it collapses deductible + cost-share + over-limit
+into a single number).
+
+This entry locks all three before any engine code lands.
+
+**Sub-decision A — Phase order: deductible runs *before* limits.**
+
+The cost-sharing math formula and the earlier "Cost-sharing
+precedence" entry are the source of truth. The phase table
+previously had them reversed; that was a documentation bug, now
+fixed in `docs/domain-model.md`. The order the engine walks:
+
+1. eligibility
+2. coverage (including `service_excluded` short-circuit)
+3. gates (preauth)
+4. **deductible**
+5. **limits**
+6. cost-sharing (copay or coinsurance)
+
+Reasoning: the math is the contract, the phase table is a summary
+of the math. The two were soft-mismatched; pick the math, rewrite
+the table. The ordering matters in a concrete case: on a $1,500
+MRI charged against $500 deductible-remaining and $0
+limit-remaining, deductible-first puts $500 toward the deductible
+accumulator and the remaining $1,000 to over-limit member-pay;
+limit-first would put the whole $1,500 to over-limit and advance
+the deductible accumulator by $0. The "over-limit amounts do not
+count toward the deductible" invariant still holds — that rule is
+about the *post-deductible* over-limit portion, not about the
+entire charge.
+
+**Sub-decision B — Eligibility is a real phase that can produce
+`denied`.**
+
+When no policy is active for the claim's member on
+`claim.service_date`, the engine writes a decision with
+`outcome = denied`, an `ELIGIBILITY` step marked `result: "fail"`
+with `terminating: true`, and amounts `payable_amount = 0`,
+`member_responsibility = charged_amount`.
+
+Reasoning: the spec already lists eligibility as phase 1. Making
+it a real engine phase means a missing-policy scenario produces a
+normal explainable denial through the same path every other
+denial uses, rather than the engine raising an exception that the
+API would later have to map to a 422 by hand. The seed data never
+triggers it (all 13 claims have active policies on their
+`service_date`), but the engine's contract becomes total over its
+inputs — which matters for the API path in phase 07, where claims
+arrive without any guarantee of an active policy.
+
+**Sub-decision C — Store `deductible_applied` on
+`AdjudicationDecision`.**
+
+Add a `deductible_applied: Decimal` column to
+`AdjudicationDecisionModel` and the corresponding domain entity,
+plus a repo function
+`sum_deductible_applied(session, member_id, period_start,
+period_end, exclude_line_item_id=None)` returning the sum of
+`deductible_applied` over current approved decisions for the
+member whose claim's `service_date` falls in the period. The
+change lands in phase 06 step 3 (service layer), before any
+decision rows exist in any environment — `reset_db` re-seeds from
+YAML, so there is no migration concern.
+
+**Options considered:**
+
+- **Column on the decision row.** One extra `Decimal` field, one
+  extra repo function. Queryable in SQL; durable across changes
+  to the explanation format.
+- **Read `deductible_applied` out of prior decisions' `explanation`
+  JSON.** No schema change, but couples the accumulator math to
+  the explanation format. The explanation is a presentation
+  concern; treating it as a queryable store mixes layers.
+
+**Choice:** column. The explanation step still records the
+deductible amount for the UI; the accumulator math reads from the
+column. Same trade-off shape as `paid_at` on `Claim` — a
+derived-but-frequently-queried number is stored when the
+alternative is JSON parsing on the read path.
+
+**Why bundle these three?** They're the only design questions the
+engine pipeline raised that aren't already answered in earlier
+entries. Each is small individually; together they form the
+engine's ground rules before any phase code lands.
+
+---
+
 <!--
 Future entries below. Format:
 
