@@ -1241,6 +1241,140 @@ them yet.
 
 ---
 
+## 2026-06-24 — Claim `paid` state: `paid_at` elevates only after adjudication finishes payable
+
+**Context:** The 2026-06-23 entry established that claim adjudication
+state is derived and only `paid_at` is stored. The first implementation
+of `derive_claim_state` checked `paid_at` *before* line-item statuses.
+Two seeded claims (`C-BOB-001`, `C-CAROL-001`) carry `paid_at` in YAML
+while their line items start `pending` and are decided by the startup
+batch. That ordering made the claim badge show **Paid** while line
+items still showed **Pending** and totals were `$0.00` — a confusing
+UI state even though the startup batch normally completes before HTTP
+serves.
+
+**Options considered:**
+
+- **Keep `paid_at` first.** Simple rule: payment timestamp wins.
+  Startup batch is supposed to hide the gap; document it and move on.
+- **Evaluate line items first; `paid_at` elevates only from a payable
+  base state (chosen).** Derive a base state from line items
+  (`submitted`, `under_review`, `approved`, `denied`,
+  `partially_approved`). Return `paid` only when `paid_at` is set
+  *and* the base is `approved` or `partially_approved`.
+
+**Choice:** line items first, then `paid_at` guard.
+
+**Reasoning:**
+
+- The original decision's intent — "`paid` means payment was issued
+  on an adjudicated claim" — is clearer when adjudication has actually
+  finished. A claim with all-`pending` line items is not meaningfully
+  paid from the reviewer's perspective even if YAML carries a
+  historical `paid_at`.
+- Keeps the claim header badge, line-item rows, and money rollups
+  consistent without relying on startup timing alone.
+- `docs/domain-model.md` derivation rule updated to match. Domain
+  tests replaced `test_paid_at_set_returns_paid_regardless_of_line_items`
+  with cases for pending + paid_at → not paid, and approved +
+  paid_at → paid.
+
+**Still true from the 2026-06-23 entry:** claim state is never stored;
+`paid_at` remains the only persisted payment marker; startup batch
+still runs before `yield` so normal operation never serves
+undecided line items.
+
+---
+
+## 2026-06-24 — Phase 08 frontend: QuickClaim SPA
+
+**Context:** Phase 07 delivered the HTTP contract. Phase 08 replaces
+the phase-04 hello-world stub (`GET /api/hello`, removed in phase 07)
+with a working UI the reviewer can click through.
+
+**Choice:** **QuickClaim** — a Vite + React + TypeScript SPA with
+React Router:
+
+- `/` — claims list with member filter (`GET /api/members`,
+  `GET /api/claims`)
+- `/claims/:id` — drill-down with summary, line items, per-line
+  coverage decision breakdown, embedded audit timeline
+  (`GET /api/claims/{id}`)
+- `/submit` — submit form (`POST /api/claims`) navigates to the
+  returned drill-down
+
+Shared pieces: typed API client, money/date formatters, status badges,
+loading/error states. User-facing copy avoids "adjudication" in favour
+of "review" / "coverage decision" for readability.
+
+**Reasoning:**
+
+- One fetch per screen where the API already denormalizes enough for
+  first paint (member names on claim rows, audit embedded on detail).
+- No auth, disputes, or reviewer flows — matches phase 07 deferred
+  list; tagline states system-only review.
+- Header layout: **QuickClaim** brand dominant; nav tabs (Claims,
+  Submit claim) top-right on the same row.
+
+**Supersedes:** phase 07 sub-decision I's note that "the frontend still
+calls `/api/hello` until phase 08" — that stub is gone.
+
+---
+
+## 2026-06-24 — Coverage rule catalog API for denial tooltips
+
+**Context:** Denied and gate-failure explanation steps cite a `rule_id`
+(e.g. `R-BASIC-009`) but the wire explanation JSON does not embed the
+full rule record (kind, parameters, policy name). The UI needs a
+hover tooltip describing what the rule means in plain English.
+
+**Options considered:**
+
+- **Hardcode rule descriptions in the frontend** from `policies.yaml`.
+  Fast but duplicates data and drifts when seed changes.
+- **Embed rule metadata in every explanation step at engine time.**
+  Enlarges persisted JSON for all decisions retroactively.
+- **Read-only `GET /api/coverage-rules` (chosen).** One catalog fetch
+  on app load; frontend joins `rule_id` → description for tooltips.
+
+**Choice:** `GET /api/coverage-rules` returning `CoverageRuleOut[]`
+with `policy_name`, `kind`, `parameters`, plus server-generated
+`description` and `parameters_summary` from
+`app/api/rule_descriptions.py`. Repo helper
+`list_coverage_rules()` joins rules to policy names.
+
+**Reasoning:**
+
+- Keeps explanations unchanged on existing decision rows.
+- Single source of truth stays the DB (loaded from YAML seed).
+- Small addition to the HTTP layer during phase 08; no engine changes.
+
+---
+
+## 2026-06-24 — Frontend unit tests: Vitest + Testing Library
+
+**Context:** Backend has ~196 pytest cases across domain, persistence,
+engine, and API. The stack decision listed Vitest + RTL "if time
+permits." Phase 09 is the formal test pass; phase 08 landed an initial
+frontend suite so utils and API glue are not untested.
+
+**Choice:** Vitest with jsdom, `@testing-library/react`, and
+`npm test` / `npm test:watch`. Initial coverage (29 tests):
+
+- `utils/format`, `utils/labels` — pure helpers
+- `api/client` — fetch URLs, `ApiError`, 404/422 bodies (mocked
+  `fetch`)
+- `StatusBadge`, `Money`, `AuditTimeline` — component smoke tests
+
+Page-level flows (`ClaimsListPage`, submit form, `RulesContext`) and
+coverage-rules route HTTP tests deferred to phase 09.
+
+**Reasoning:** Tests the behaviour a reviewer is most likely to break
+when tweaking copy or formatting. Page/integration tests cost more setup
+for diminishing return in a take-home with strong backend coverage.
+
+---
+
 <!--
 Future entries below. Format:
 

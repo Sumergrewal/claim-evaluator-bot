@@ -1,75 +1,74 @@
 # claim-evaluator-bot
 
 A claims processing system for an insurance company. Members submit
-claims with line items; the system adjudicates each line item against
-coverage rules, moves the claim through its lifecycle, and explains
-every decision.
+claims with line items; the system reviews each line item against
+coverage rules, tracks claim lifecycle, and explains every decision.
 
-Built as a take-home assignment. See [`docs/decisions.md`](docs/decisions.md)
+See [`docs/decisions.md`](docs/decisions.md)
 for the reasoning behind every non-trivial choice.
 
 ## Status
 
-Backend through **phase 07** (REST API for members, claims, and
-audit). On first launch the app seeds from `data/*.yaml` and
-adjudicates every pending line item before serving requests.
+**Backend** (phases 05–07): domain model, SQLite persistence, YAML seed
+data, six-phase rules engine, REST API.
 
-The frontend is still the phase-04 hello-world scaffold — it calls
-`GET /api/hello`, which no longer exists. Phase 08 replaces it with
-the real claims UI. Until then, explore the API via
-[http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI)
-or the endpoints below.
+**Frontend** (phase 08): **QuickClaim** — a React SPA for listing and
+filtering claims, drilling into line-item decisions and audit history,
+and submitting new claims.
+
+On first launch the backend seeds from `data/*.yaml` and reviews every
+pending line item before serving HTTP requests.
 
 See the [phase tracker in `AGENTS.md`](AGENTS.md#phase-tracker) for
-progress.
+progress. Phases 09–11 (test polish, docs, QA) are still in progress.
 
 ## Stack
 
 | Layer | Choice |
 |---|---|
-| Backend | Python 3.11+, FastAPI, SQLAlchemy, Pydantic |
+| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.x, Pydantic |
 | Package manager | [`uv`](https://docs.astral.sh/uv/) |
-| Persistence | SQLite (file-based, zero external setup) |
+| Persistence | SQLite (`claims.db` in repo root, gitignored) |
 | Backend testing | `pytest` + `httpx` |
-| Frontend | React + TypeScript, Vite |
-| Frontend testing | Vitest + React Testing Library (if time permits) |
+| Frontend | React 19 + TypeScript, Vite, React Router |
+| Frontend testing | Vitest + React Testing Library + jsdom |
 
 ## Repo layout
 
 ```text
 claim-evaluator-bot/
 ├── app/                       # Python backend (FastAPI)
-│   ├── api/                   # Route handlers (thin HTTP layer)
-│   ├── domain/                # Pure domain logic (entities, state machines) — no DB, no HTTP
-│   ├── adjudication/          # Coverage-rule engine
-│   ├── persistence/           # SQLAlchemy models + repositories
+│   ├── api/                   # Route handlers + Pydantic schemas
+│   ├── domain/                # Pure domain logic — no DB, no HTTP
+│   ├── adjudication/          # Coverage-rule engine + service layer
+│   ├── persistence/           # SQLAlchemy models + repositories + seed loader
 │   ├── scripts/               # CLI entrypoints (reset_db)
 │   ├── main.py                # FastAPI app entrypoint
-│   └── tests/                 # pytest suite
-│       ├── domain/            # Pure domain tests (no DB, no HTTP)
-│       ├── persistence/       # Repository and seed-loader tests
-│       ├── adjudication/      # Rules engine and service tests
-│       └── api/               # HTTP integration tests (TestClient)
-├── frontend/                  # React + TS + Vite SPA (phase-04 stub until phase 08)
-├── data/                      # Sample policies, claims, seed data
+│   └── tests/                 # pytest suite (domain, persistence, engine, API)
+├── frontend/                  # QuickClaim React SPA
+│   └── src/
+│       ├── api/               # Fetch client for /api/*
+│       ├── components/        # UI building blocks
+│       ├── pages/             # Claims list, detail, submit
+│       ├── utils/             # Formatting + label helpers
+│       └── test/              # Vitest setup
+├── data/                      # Seed YAML (members, policies, claims)
 ├── docs/
-│   ├── domain-model.md        # Entities, relationships, state machines
-│   ├── decisions.md           # Running log of decisions & trade-offs
-│   └── self-review.md         # Honest assessment of what's good vs. rough
-├── ai-artifacts/              # Raw Cursor JSONL session logs (copied at the end, one per phase)
-├── AGENTS.md                  # Agent guidance: project context + general rules
-├── pyproject.toml             # uv-managed Python project
-├── uv.lock                    # Locked Python deps
-├── .python-version            # 3.11 pin
-├── README.md
-└── .gitignore
+│   ├── domain-model.md
+│   ├── decisions.md
+│   └── self-review.md
+├── ai-artifacts/              # Raw Cursor JSONL session logs (one per phase)
+├── AGENTS.md
+├── pyproject.toml
+├── uv.lock
+└── README.md
 ```
 
 ## Prerequisites
 
 - Python ≥ 3.11
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv` or `pipx install uv`)
-- Node.js ≥ 20 and `npm` (for the frontend)
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+- Node.js ≥ 20 and `npm`
 
 ## Setup
 
@@ -88,32 +87,58 @@ cd ..
 
 ## Running
 
+Start the backend from the **repo root**, then the frontend in a second
+terminal.
+
 ```bash
-# Backend — from repo root, http://localhost:8000
+# Terminal 1 — API at http://localhost:8000
 uv run uvicorn app.main:app --reload
 
-# Frontend — in a separate terminal, http://localhost:5173
+# Terminal 2 — QuickClaim UI at http://localhost:5173
 cd frontend
 npm run dev
 ```
 
-Open [http://localhost:8000/docs](http://localhost:8000/docs) for
-interactive API docs. The frontend page will error until phase 08
-replaces the hello-world call.
+Open [http://localhost:5173](http://localhost:5173) for the UI, or
+[http://localhost:8000/docs](http://localhost:8000/docs) for interactive
+API docs (Swagger).
 
-## API (phase 07)
+### QuickClaim UI
 
-All routes are under `/api`. Responses use JSON; money fields are
-strings (e.g. `"150.00"`) for exact `Decimal` round-trip.
+| Route | What it does |
+|---|---|
+| `/` | Claims list with member filter |
+| `/claims/:id` | Claim detail — summary, line items, coverage decision breakdown, audit timeline |
+| `/submit` | Submit a new claim; navigates to the reviewed result |
+
+The UI talks to the backend at `http://localhost:8000` by default. Override
+with `VITE_API_BASE` if needed.
+
+### Sample members (seed data)
+
+| Member | Policy | Good demos |
+|---|---|---|
+| Alice (M-001) | Basic | Deductible absorption, cross-claim caps, exclusions |
+| Bob (M-002) | Premium | Preauth + MRI, bariatric covered with preauth |
+| Carol (M-003) | Dental | Paid claim, partial approval, missing preauth |
+
+Try service types like `general_consultation`, `physiotherapy`, `mri`,
+`bariatric_surgery`, `cleaning`, `cosmetic_whitening`.
+
+## API
+
+All routes are under `/api`. Money fields are JSON strings (e.g.
+`"150.00"`) for exact `Decimal` round-trip.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/members` | List members (for filters and submit form) |
+| `GET` | `/api/members` | List members (filters + submit form) |
+| `GET` | `/api/coverage-rules` | Coverage rule catalog with tooltip descriptions |
 | `GET` | `/api/claims` | List claims; optional `?member_id=` filter |
-| `GET` | `/api/claims/{claim_id}` | Claim drill-down: line items, current decisions, explanations, embedded audit timeline |
-| `POST` | `/api/claims` | Submit a new claim; server generates ids, adjudicates every line item, returns the same shape as the drill-down |
+| `GET` | `/api/claims/{claim_id}` | Drill-down: line items, decisions, explanations, audit timeline |
+| `POST` | `/api/claims` | Submit claim; server generates ids, reviews line items, returns drill-down shape |
 | `GET` | `/api/claims/{claim_id}/audit` | Audit timeline for a claim and its line items |
-| `GET` | `/api/line-items/{line_item_id}/audit` | Audit timeline scoped to one line item |
+| `GET` | `/api/line-items/{line_item_id}/audit` | Audit timeline for one line item |
 
 **Submit body** (`POST /api/claims`):
 
@@ -133,58 +158,46 @@ strings (e.g. `"150.00"`) for exact `Decimal` round-trip.
 }
 ```
 
-Unknown `member_id` on filter or submit returns **404**. Invalid
-JSON shape returns **422**. A claim with no active policy on
-`service_date` is still accepted (**201**); the engine denies it with
-a structured explanation in the response.
-
-Design rationale for these choices lives in
-[`docs/decisions.md`](docs/decisions.md) (2026-06-24 phase 07 entry).
+Unknown `member_id` → **404**. Invalid JSON → **422**. No active policy
+on `service_date` → still **201**; the engine denies with a structured
+explanation in the response.
 
 ## Resetting the database
 
-The SQLite database lives at `claims.db` in the repo root (gitignored,
-so it never enters version control). On first launch the backend
-auto-seeds it from `data/*.yaml`; on subsequent launches your state
-persists across restarts.
+The SQLite file `claims.db` lives in the repo root (gitignored). First
+launch auto-seeds from `data/*.yaml`; later launches persist your state.
 
-If you want to start from a clean slate — for example after pulling
-schema changes, or to throw away demo state you've created via the UI:
+To wipe and re-seed (after schema changes or to start fresh):
 
 ```bash
 uv run python -m app.scripts.reset_db
 ```
 
-This drops every table, recreates the schema from the current
-SQLAlchemy models, and re-seeds from `data/*.yaml`.
-
-> **When to run it:** any time the SQLAlchemy models change. The
-> backend uses `Base.metadata.create_all()` (not Alembic) for schema
-> management — that means new tables get created on startup, but
-> existing tables aren't migrated in place. After a model change,
-> `reset_db` is the way to get the new schema. See the persistence
-> decision in [`docs/decisions.md`](docs/decisions.md) for the
-> reasoning.
+Run this whenever SQLAlchemy models change — the app uses
+`create_all()` (not Alembic), so existing tables are not migrated in
+place.
 
 ## Running tests
 
 ```bash
+# Backend — from repo root (~196 tests)
 uv run pytest
+
+# Frontend — from frontend/ (29 tests)
+cd frontend
+npm test
 ```
+
+Other frontend scripts: `npm run lint`, `npm run build`.
 
 ## Documentation
 
-- [`AGENTS.md`](AGENTS.md) — agent instructions, phase tracker, and the
-  one-liner to paste into any new Cursor chat for full context.
-- [`docs/domain-model.md`](docs/domain-model.md) — entities,
-  relationships, state machines.
-- [`docs/decisions.md`](docs/decisions.md) — every non-trivial decision,
-  with options considered and reasoning.
-- [`docs/self-review.md`](docs/self-review.md) — honest gap list and
-  things I'd change with more time.
+- [`AGENTS.md`](AGENTS.md) — agent instructions and phase tracker
+- [`docs/domain-model.md`](docs/domain-model.md) — entities, state machines
+- [`docs/decisions.md`](docs/decisions.md) — decisions and trade-offs
+- [`docs/self-review.md`](docs/self-review.md) — honest gap list
 
 ## AI session logs
 
-Raw `.jsonl` session logs from every phase live in `ai-artifacts/`.
-These are unmodified Cursor session files — UUIDs preserved in the
-filename — prefixed by phase number for readability.
+Raw `.jsonl` Cursor session logs for each build phase live in
+`ai-artifacts/`. Filenames follow `NN-phase-name__<uuid>.jsonl`.

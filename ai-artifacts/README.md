@@ -40,11 +40,12 @@ Examples:
 3. `03-planning` — architecture, schema, state machines
 4. `04-scaffolding` — repo layout, dependency init
 5. `05-backend-core` — entities, persistence layer
-6. `06-backend-adjudication` — rules engine, state machine, API
-7. `07-frontend` — React UI
-8. `08-tests` — fill out test coverage
-9. `09-docs` — finalize docs
-10. `10-qa` — bug hunt, edge cases, polish
+6. `06-backend-adjudication` — rules engine, state machine
+7. `07-backend-api` — FastAPI routes for claims/decisions/audit
+8. `08-frontend` — QuickClaim React UI
+9. `09-tests` — finalize test coverage (frontend Vitest baseline done)
+10. `10-docs` — fill out the three docs
+11. `11-qa` — bug hunt, polish, edge cases
 
 Logs are copied in **at the end of each phase** as part of that phase's
 commit. This keeps the git history coherent — each phase's JSONL is
