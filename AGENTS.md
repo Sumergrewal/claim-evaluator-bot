@@ -205,7 +205,7 @@ npm run dev
 - [x] **02-domain-research** — adjudication / rule patterns understood
 - [x] **03-planning** — domain model, state machines, rule schema, cost-sharing math, deferred-feature list, sample data (3 members + 3 policies + curated claim set covering every engine path), and persistence layer (SQLAlchemy 2.x, separated domain/ORM, functional repos, per-request session, `create_all` + reset CLI) all locked in. Coverage rules and seed data are YAML in `data/`, loaded on first startup
 - [x] **04-scaffolding** — uv project initialised; backend deps (FastAPI, SQLAlchemy 2.x, Pydantic, PyYAML, uvicorn) + dev deps (pytest, httpx, ruff) locked via `uv.lock`; Vite + React + TS frontend scaffolded; hello-world endpoint (`GET /api/hello`) wired with CORS for `localhost:5173`; frontend page calls it on mount and renders the response
-- [ ] **05-backend-core**
+- [x] **05-backend-core** — domain entities (frozen dataclasses) + claim-state derivation; SQLAlchemy 2.x persistence (engine, Base, per-request session, ORM models with `to_domain`/`from_domain`, functional repositories, accumulator query, explicit audit-event helper); YAML seed data (3 members, 3 policies with 32 rules, 13 curated claims, 15 line items); Pydantic seed loader with discriminated rule-kind union and cross-entity validation; `reset_db` CLI; FastAPI lifespan wires `create_all` + idempotent seeding on startup; `app.*` logger configured for startup/seed/audit/rollback visibility. Test suite (47 tests) covers entity invariants, claim-state derivation, ORM round-trip, repos (active policy, supersession, accumulator), audit helper, and seed-loader failure modes.
 - [ ] **06-backend-adjudication**
 - [ ] **07-frontend**
 - [ ] **08-tests**
