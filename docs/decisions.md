@@ -15,7 +15,7 @@ captures **context**, **options considered**, **choice**, and
 | **Backend** | Python 3.11+, FastAPI, SQLAlchemy 2.x, SQLite. Pure domain layer (`app/domain/`), rules engine (`app/adjudication/`), persistence + YAML seed loader (`app/persistence/`), REST API (`app/api/`). |
 | **Frontend** | **QuickClaim** — Vite + React + TypeScript SPA: claims list (member filter), claim drill-down (line items, coverage decisions, audit timeline), submit form. |
 | **Data** | Three members, three policies (32 coverage rules), 13 curated seed claims in `data/*.yaml`. DB file is gitignored; auto-seeds on first launch. |
-| **Tests** | ~197 pytest (domain, persistence, engine, API, scripts) + 29 Vitest (formatters, API client, component smoke tests). Tests land in the same commit as the code they cover. |
+| **Tests** | ~202 pytest (domain, persistence, engine, API, scripts) + 29 Vitest (formatters, API client, component smoke tests). Tests land in the same commit as the code they cover. |
 | **Tooling** | `uv` + lockfile, `reset_db` CLI, raw Cursor JSONL logs in `ai-artifacts/`. |
 
 ### Application flow (logic)
@@ -49,6 +49,13 @@ POST /api/claims
 GET /api/coverage-rules
   └─ rule catalog for denial tooltips (frontend joins rule_id → plain-English description)
 
+POST /api/line-items/{id}/dispute
+  ├─ validate line item exists (else 404); status must be approved or denied (else 409)
+  ├─ reject if an open dispute already exists (409)
+  ├─ insert Dispute (status: open); line item → needs_review
+  ├─ audit: dispute.filed, line_item.state_changed
+  └─ return ClaimDetailOut (201) — current AdjudicationDecision unchanged until reviewer resolves
+
 reset_db CLI
   └─ drop tables → create_all → re-seed → adjudicate_all_pending (same end state as startup)
 ```
@@ -62,12 +69,13 @@ are specified in [`domain-model.md`](domain-model.md). Claim
 
 | Shipped | Not shipped (documented / deferred) |
 |---|---|
-| System adjudication of pending line items | Dispute filing, reviewer override UI, mark-claim-paid API |
+| System adjudication of pending line items | Dispute resolution, reviewer override UI, mark-claim-paid API |
 | Structured per-phase explanations on every decision | Auth, pagination, email, admin panels |
-| Audit log (claim submit + line item decided) | Visit-count limits, OOPM, plan-year / rolling limit periods |
-| Submit + list + drill-down UI with rule tooltips | Provider / Preauthorization as first-class entities |
-| `Dispute` entity + ORM (forward-compatible schema) | Post-payment dispute / claim reopen |
-| Seed `paid_at` on two claims for demo of `paid` state | Alembic migrations (throwaway DB + `reset_db`) |
+| Audit log (claim submit, line item decided, dispute filed) | `dispute.resolved`, `claim.paid` audit events |
+| Submit + list + drill-down UI with rule tooltips | Visit-count limits, OOPM, plan-year / rolling limit periods |
+| Dispute filing (`POST /api/line-items/{id}/dispute` + UI modal) | Provider / Preauthorization as first-class entities |
+| Seed `paid_at` on two claims for demo of `paid` state | Post-payment dispute / claim reopen |
+| `Dispute` entity + ORM (forward-compatible schema) | Alembic migrations (throwaway DB + `reset_db`) |
 
 Full deferral reasoning lives in the dated entries below and in
 `domain-model.md` § Explicitly deferred.
@@ -87,9 +95,14 @@ Full deferral reasoning lives in the dated entries below and in
   accumulator math is deterministic.
 - **Disputes occur before payment.** `paid_at` is set only on seed data
   for demo; there is no HTTP route to mark a claim paid or reopen one.
+- **Members can file disputes; reviewers cannot resolve them in this
+  build.** Filing moves the line item to `needs_review` and writes
+  `dispute.filed` + `line_item.state_changed`. The current
+  `AdjudicationDecision` is left in place until a reviewer writes a
+  superseding decision (no reviewer API).
 - **Human-only resolution for `needs_review`.** The engine writes
-  `decided_by = "system"`; gate failures and disputes stay in review until
-  a reviewer writes a superseding decision (no reviewer API in this build).
+  `decided_by = "system"`; gate failures and filed disputes stay in
+  review until a reviewer supersedes the decision.
 - **Out-of-scope per spec:** auth, enrollment, member/provider account
   management, notifications, analytics, multi-tenancy.
 - **Naive UTC datetimes** throughout — SQLite strips `tzinfo` on
@@ -1487,6 +1500,9 @@ applies: filing would move a line item to `needs_review`; resolving
 would write a superseding `AdjudicationDecision` with
 `decided_by = "reviewer:<id>"`.
 
+> **Superseded for filing** by the 2026-06-25 entry below. Dispute
+> filing is now shipped; resolution remains deferred.
+
 **Reasoning:** Modeling disputes in the domain shows the lifecycle was
 thought through — claim state derivation already accounts for
 `needs_review` from disputes — without spending build time on API and
@@ -1557,3 +1573,42 @@ show deductible filling on an early claim and coinsurance on a later
 one even when the service types differ. Documented in
 `domain-model.md` invariants alongside the limit accumulator.
 
+---
+
+## 2026-06-25 — Dispute filing shipped (resolution still deferred)
+
+**Context:** The `Dispute` entity and ORM existed from phase 05, but the
+2026-06-24 entry deferred the full flow. For submission polish we
+needed a member-visible path to challenge an `approved` or `denied`
+line item without building reviewer tooling or re-running the engine.
+
+**Options considered:**
+
+- **Full dispute lifecycle** — file + reviewer resolve + superseding
+  decision + `dispute.resolved` audit. Correct end state, but reviewer
+  UI/API is a large slice and duplicates patterns we already defer
+  (auth, `decided_by = reviewer:<id>`).
+- **File-only dispute** (chosen) — persist `Dispute`, move line item to
+  `needs_review`, emit audit events, return refreshed claim detail. Leave
+  the current `AdjudicationDecision` row untouched so the member still
+  sees what was decided while the claim shows `under_review`.
+- **Auto re-adjudicate on file.** Rejected — disputes are human review
+  with possible new facts, not a rules re-run (2026-06-23 entry).
+
+**Choice:** `POST /api/line-items/{line_item_id}/dispute` with
+`{"reason": "..."}`; `app/disputes/service.py` enforces status and
+one-open-dispute-per-line-item (409 otherwise). QuickClaim shows a
+"Raise dispute" action on approved/denied rows, modal for reason,
+success banner. Claim audit timeline merges `dispute.filed` events.
+Five API tests in `app/tests/api/test_routes_disputes.py`.
+
+**Not built:** reviewer resolution route, `dispute.resolved` audit,
+new `AdjudicationDecision` on file, seed dispute rows.
+
+**Reasoning:** Filing is the member-facing half of the lifecycle and
+exercises claim-state derivation (`under_review`), audit plumbing, and
+the `Dispute` table without faking a reviewer persona. Leaving the
+decision row stable avoids implying the dispute already changed
+coverage math — the UI can show both "prior decision" and "under
+review" honestly. Resolution stays the natural follow-on once auth and
+reviewer identity exist.

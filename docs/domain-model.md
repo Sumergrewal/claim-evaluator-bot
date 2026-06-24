@@ -18,9 +18,10 @@ or more **LineItems** (individual billable services). The system
 overall status is derived from the states of its line items. Every
 adjudication and submission writes an **AuditEvent**.
 
-The domain also models **Disputes** (a member challenging a line-item
-decision), but the filing and resolution flow is **not shipped** — see
-[Implementation status](#implementation-status) and
+Members can **file a Dispute** against an `approved` or `denied` line
+item, which moves it to `needs_review` for human evaluation. **Dispute
+resolution** (reviewer writes a superseding decision) is not shipped —
+see [Implementation status](#implementation-status) and
 [`decisions.md`](decisions.md).
 
 ---
@@ -58,11 +59,11 @@ Why this decomposition:
 |---|---|
 | Member, Policy, CoverageRule, Claim, LineItem | **Shipped** — seeded from `data/*.yaml`, exposed via REST |
 | AdjudicationDecision + six-phase engine | **Shipped** — system adjudicates on startup and on `POST /api/claims` |
-| AuditEvent (`claim.submitted`, `line_item.decided`) | **Shipped** — embedded on claim drill-down + dedicated audit routes |
+| AuditEvent (`claim.submitted`, `line_item.decided`, `dispute.filed`, `line_item.state_changed`) | **Shipped** — embedded on claim drill-down + dedicated audit routes |
 | Claim `adjudication_state` derivation + `paid_at` guard | **Shipped** — `paid` only when base state is payable and `paid_at` is set |
 | QuickClaim UI (list, detail, submit, rule tooltips) | **Shipped** — `GET /api/coverage-rules` for denial tooltips |
-| `Dispute` entity + ORM table | **Modeled, not exposed** — schema and round-trip tests exist; no seed data, routes, or UI |
-| Dispute filing / reviewer override | **Not shipped** — state machines document the intended flow |
+| Dispute filing (`POST /api/line-items/{id}/dispute`) | **Shipped** — member files reason; line item → `needs_review`; UI modal + success message |
+| Dispute resolution / reviewer override | **Not shipped** — no API or UI to resolve; no `dispute.resolved` |
 | Mark claim paid (`paid_at` via API) | **Not shipped** — two seed claims carry `paid_at` for demo only |
 | Auth, pagination, Alembic migrations | **Not shipped** — see [Explicitly deferred](#explicitly-deferred-not-built-in-this-submission) |
 
@@ -195,15 +196,12 @@ Why this decomposition:
     with `supersedes_id` pointing at the previous current one.
   - At most one decision per line item is "current" (i.e. not pointed
     to by any other row's `supersedes_id`).
-  - The line item's `status`, `payable_amount`, and
-    `member_responsibility` mirror the current decision.
+  - The line item's `payable_amount` and `member_responsibility` mirror
+    the current decision. `status` normally mirrors `outcome` too, except
+    after dispute filing: status becomes `needs_review` while the current
+    decision row is unchanged.
 
 ### Dispute
-
-> **Not shipped.** The `Dispute` entity and ORM model exist for
-> forward-compatible schema; no dispute rows are seeded and no API or
-> UI implements filing or resolution. The spec below is the intended
-> behaviour when the flow is built.
 
 - **Purpose:** a member's challenge to a specific line item decision.
 - **Fields:**
@@ -217,9 +215,18 @@ Why this decomposition:
 - **Relationships:** belongs to one `LineItem`.
 - **Invariants:**
   - Filing a dispute on a line item in state `approved` or `denied`
-    moves it back to `needs_review` and produces an audit event.
-  - Resolving a dispute writes a new `AdjudicationDecision` that
-    supersedes the previous current one.
+    moves it to `needs_review` and produces audit events (`dispute.filed`,
+    `line_item.state_changed`). At most one `open` dispute per line item.
+  - The current `AdjudicationDecision` row is **unchanged** on filing —
+    status moves to `needs_review` while amounts and explanation still
+    reflect the prior system decision until a reviewer supersedes it.
+  - Resolving a dispute (not shipped) would write a new
+    `AdjudicationDecision` that supersedes the previous current one.
+
+**Filing API:** `POST /api/line-items/{line_item_id}/dispute` with body
+`{"reason": "..."}`. Returns refreshed `ClaimDetailOut`. Actor is
+`member`. No seed disputes — rows are created only when a user files
+from the UI.
 
 ### AuditEvent
 
@@ -229,9 +236,8 @@ Why this decomposition:
 - **Fields:**
   - `id` (PK).
   - `event_type` — string. **Written in this build:** `claim.submitted`,
-    `line_item.decided`. **Spec only (not emitted yet):**
-    `line_item.state_changed`, `dispute.filed`, `dispute.resolved`,
-    `claim.paid`.
+    `line_item.decided`, `dispute.filed`, `line_item.state_changed`.
+    **Not emitted yet:** `dispute.resolved`, `claim.paid`.
   - `entity_type` — string (`claim`, `line_item`, `dispute`).
   - `entity_id` — string.
   - `actor` — string (`system`, `member`, `reviewer:<id>`).
@@ -275,8 +281,10 @@ erDiagram
 
 ### Line item lifecycle
 
-Line item state is **stored** on the row. It mirrors the outcome of the
-current (non-superseded) AdjudicationDecision.
+Line item state is **stored** on the row. It normally mirrors the
+outcome of the current (non-superseded) `AdjudicationDecision`, except
+when a dispute is filed: `status` becomes `needs_review` while the
+decision row (and derived amounts) stay as they were.
 
 ```mermaid
 stateDiagram-v2
@@ -295,13 +303,13 @@ Notes:
 - **Partial coverage is `approved`, not its own state.** A line item
   charged $150 with a $80 payable amount (the rest hit a cap) is
   `approved`, with the explanation carrying the "why only $80."
-- A dispute always lands the line item back in `needs_review` *(spec;
-  flow not shipped)*.
-- **`needs_review` is only ever cleared by a human reviewer.** The
-  shipped engine never auto-resolves `needs_review` — gate failures stay
-  in review until a reviewer writes a superseding decision. The
-  intended contract: `decided_by = "reviewer:<id>"` with
-  `supersedes_id` pointing at the previous current decision.
+- A dispute filed via `POST /api/line-items/{id}/dispute` moves the
+  line item to `needs_review` and the claim to `under_review` when any
+  line item needs review.
+- **`needs_review` is only ever cleared by a human reviewer** (not
+  shipped). The engine never auto-resolves `needs_review`. The intended
+  resolution contract: `decided_by = "reviewer:<id>"` with `supersedes_id`
+  pointing at the previous current decision.
 
 ### Claim lifecycle
 
@@ -333,9 +341,9 @@ Notes:
 
 - `paid` can only be entered from `approved` or `partially_approved` —
   never from `denied` or `under_review`.
-- Dispute transitions in the diagram above are **spec only** — not
-  reachable in the running app. Disputes are assumed to occur before
-  payment; post-payment reopen is not built.
+- Dispute filing on a line item moves the claim to `under_review` via
+  derived state. Disputes are assumed to occur before payment;
+  post-payment reopen is not built.
 
 ---
 
@@ -485,7 +493,7 @@ reviewer can see they were thought about. Full reasoning in
 
 | Item | Current handling | What we'd do if we built it |
 |---|---|---|
-| Dispute filing and resolution | `Dispute` entity + ORM exist; no seed, API, or UI | Routes to file/resolve; line item → `needs_review`; reviewer writes superseding decision |
+| Dispute resolution | Filing shipped; `dispute.resolved` and reviewer superseding decision not built | Reviewer API + UI; new `AdjudicationDecision` with `decided_by = reviewer:<id>` |
 | Mark claim paid | `paid_at` on two seed claims only; no HTTP route | `POST` or patch to set `paid_at` when base state is payable; `claim.paid` audit event |
 | Limit periods other than calendar year (plan year, rolling 12-month) | Engine accepts only `period: "calendar_year"` on `annual_limit` rules | Generalise the period-to-date-range function; everything else stays the same |
 | Visit-count limits (e.g. "20 physio visits/year") | Not modelled | New rule kind `visit_count_limit` with the same shape as `annual_limit` but counting line items instead of summing dollars |

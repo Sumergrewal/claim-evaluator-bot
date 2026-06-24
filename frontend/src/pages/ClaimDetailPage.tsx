@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ApiError, getClaim } from '../api/client'
+import { ApiError, fileDispute, getClaim } from '../api/client'
 import { AuditTimeline } from '../components/AuditTimeline'
 import { ErrorState } from '../components/ErrorState'
 import { LineItemTable } from '../components/LineItemTable'
 import { LoadingState } from '../components/LoadingState'
 import { Money } from '../components/Money'
 import { StatusBadge } from '../components/StatusBadge'
-import type { ClaimDetailOut } from '../types/api'
+import type { ClaimDetailOut, LineItemOut } from '../types/api'
 import { formatDate, formatDateTime } from '../utils/format'
 
 export function ClaimDetailPage() {
@@ -15,6 +15,11 @@ export function ClaimDetailPage() {
   const [claim, setClaim] = useState<ClaimDetailOut | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<{ message: string; notFound: boolean } | null>(null)
+  const [disputeTarget, setDisputeTarget] = useState<LineItemOut | null>(null)
+  const [disputeReason, setDisputeReason] = useState('')
+  const [disputingLineItemId, setDisputingLineItemId] = useState<string | null>(null)
+  const [disputeError, setDisputeError] = useState<string | null>(null)
+  const [disputeSuccess, setDisputeSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     if (!claimId) return
@@ -41,6 +46,35 @@ export function ClaimDetailPage() {
 
     return () => controller.abort()
   }, [claimId])
+
+  async function handleDisputeSubmit() {
+    if (!disputeTarget) return
+    const reason = disputeReason.trim()
+    if (!reason) {
+      setDisputeError('Please describe why you are disputing this decision.')
+      return
+    }
+
+    setDisputeError(null)
+    setDisputingLineItemId(disputeTarget.id)
+    try {
+      const updated = await fileDispute(disputeTarget.id, reason)
+      setClaim(updated)
+      setDisputeTarget(null)
+      setDisputeReason('')
+      setDisputeSuccess(
+        'Your dispute has been raised with our team. A human reviewer will evaluate it.',
+      )
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setDisputeError(err.message)
+      } else {
+        setDisputeError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      setDisputingLineItemId(null)
+    }
+  }
 
   if (!claimId) {
     return (
@@ -107,6 +141,12 @@ export function ClaimDetailPage() {
         <StatusBadge kind="claim" value={claim.adjudication_state} />
       </div>
 
+      {disputeSuccess && (
+        <div className="banner banner--success" role="status">
+          {disputeSuccess}
+        </div>
+      )}
+
       <section className="card summary-card">
         <h2>Summary</h2>
         <dl className="detail-grid">
@@ -156,13 +196,71 @@ export function ClaimDetailPage() {
       <section className="card">
         <h2>Line items &amp; decisions</h2>
         <p className="section-hint">Click a row to see why this line was approved, denied, or flagged.</p>
-        <LineItemTable lineItems={claim.line_items} />
+        <LineItemTable
+          lineItems={claim.line_items}
+          onRaiseDispute={(lineItem) => {
+            setDisputeSuccess(null)
+            setDisputeError(null)
+            setDisputeReason('')
+            setDisputeTarget(lineItem)
+          }}
+          disputingLineItemId={disputingLineItemId}
+        />
       </section>
 
       <section className="card">
         <h2>Audit timeline</h2>
         <AuditTimeline events={claim.audit_events} />
       </section>
+
+      {disputeTarget && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setDisputeTarget(null)}>
+          <div
+            className="modal card"
+            role="dialog"
+            aria-labelledby="dispute-dialog-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="dispute-dialog-title">Raise dispute</h2>
+            <p className="section-hint">
+              Disputing <strong>{disputeTarget.service_description}</strong>. We will route this
+              to our team for human review.
+            </p>
+            <label className="field">
+              <span>Reason</span>
+              <textarea
+                rows={4}
+                value={disputeReason}
+                onChange={(e) => setDisputeReason(e.target.value)}
+                placeholder="Explain why you disagree with this coverage decision…"
+              />
+            </label>
+            {disputeError && (
+              <div className="form-error" role="alert">
+                {disputeError}
+              </div>
+            )}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => setDisputeTarget(null)}
+                disabled={disputingLineItemId !== null}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button button--primary"
+                disabled={disputingLineItemId !== null}
+                onClick={() => void handleDisputeSubmit()}
+              >
+                {disputingLineItemId ? 'Submitting…' : 'Submit dispute'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

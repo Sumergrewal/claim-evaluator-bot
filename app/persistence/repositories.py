@@ -15,9 +15,9 @@ What's covered:
 
 What's not (yet):
 
-- Disputes. Repos for them land alongside the dispute flow in
-  phase 06/07; nothing in phase 05 reads disputes.
-- Write helpers. Callers add ORM rows directly via
+- Dispute write helpers — `file_dispute` in `app/disputes/service.py`
+  stages rows directly.
+- General write helpers. Callers add ORM rows directly via
   `session.add(Model.from_domain(...))`. The exception is audit
   events, which get their own helper in `audit.py` because the helper
   also constructs the entity (see decisions log sub-decision G).
@@ -48,6 +48,7 @@ from app.persistence.models import (
     AuditEventModel,
     ClaimModel,
     CoverageRuleModel,
+    DisputeModel,
     LineItemModel,
     MemberModel,
     PolicyModel,
@@ -376,6 +377,9 @@ def list_audit_events_for_claim(
     line_item_id_subq = select(LineItemModel.id).where(
         LineItemModel.claim_id == claim_id
     )
+    dispute_id_subq = select(DisputeModel.id).where(
+        DisputeModel.line_item_id.in_(line_item_id_subq)
+    )
     stmt = (
         select(AuditEventModel)
         .where(
@@ -387,6 +391,10 @@ def list_audit_events_for_claim(
                 and_(
                     AuditEventModel.entity_type == "line_item",
                     AuditEventModel.entity_id.in_(line_item_id_subq),
+                ),
+                and_(
+                    AuditEventModel.entity_type == "dispute",
+                    AuditEventModel.entity_id.in_(dispute_id_subq),
                 ),
             )
         )

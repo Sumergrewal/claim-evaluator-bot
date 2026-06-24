@@ -378,6 +378,12 @@ class LineItemSubmitIn(_StrictIn):
     preauth_ref: str | None = None
 
 
+class DisputeFileIn(_StrictIn):
+    """`POST /api/line-items/{id}/dispute` body."""
+
+    reason: str = Field(min_length=1)
+
+
 class ClaimSubmitIn(_StrictIn):
     """`POST /api/claims` body.
 
@@ -403,6 +409,7 @@ __all__ = (
     "ClaimSummaryOut",
     "ClaimTotalsOut",
     "DecisionOut",
+    "DisputeFileIn",
     "ExplanationOut",
     "ExplanationStepOut",
     "LineItemOut",

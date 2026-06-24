@@ -695,6 +695,43 @@
   color: var(--text-muted);
 }
 
+.banner {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.banner--success {
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text-h);
+}
+
+.line-item-detail__actions {
+  margin-top: 1rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 0.45);
+}
+
+.modal {
+  width: min(100%, 32rem);
+  margin: 0;
+}
+
+.modal h2 {
+  margin-top: 0;
+}
+
 @media (max-width: 720px) {
   .app-header__top {
     flex-wrap: wrap;

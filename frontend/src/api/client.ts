@@ -72,3 +72,16 @@ export function submitClaim(body: ClaimSubmitIn): Promise<ClaimDetailOut> {
     body: JSON.stringify(body),
   })
 }
+
+export function fileDispute(
+  lineItemId: string,
+  reason: string,
+): Promise<ClaimDetailOut> {
+  return request<ClaimDetailOut>(
+    `/api/line-items/${encodeURIComponent(lineItemId)}/dispute`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    },
+  )
+}

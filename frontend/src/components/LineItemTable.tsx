@@ -7,9 +7,19 @@ import { StatusBadge } from './StatusBadge'
 
 type LineItemTableProps = {
   lineItems: LineItemOut[]
+  onRaiseDispute?: (lineItem: LineItemOut) => void
+  disputingLineItemId?: string | null
 }
 
-export function LineItemTable({ lineItems }: LineItemTableProps) {
+function canDispute(status: LineItemOut['status']): boolean {
+  return status === 'approved' || status === 'denied'
+}
+
+export function LineItemTable({
+  lineItems,
+  onRaiseDispute,
+  disputingLineItemId = null,
+}: LineItemTableProps) {
   const [selectedId, setSelectedId] = useState<string | null>(
     lineItems[0]?.id ?? null,
   )
@@ -100,6 +110,23 @@ export function LineItemTable({ lineItems }: LineItemTableProps) {
               <ExplanationPanel decision={selected.current_decision} />
             ) : (
               <p className="empty-note">No decision yet — still being reviewed.</p>
+            )}
+            {onRaiseDispute && canDispute(selected.status) && (
+              <div className="line-item-detail__actions">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={disputingLineItemId === selected.id}
+                  onClick={() => onRaiseDispute(selected)}
+                >
+                  {disputingLineItemId === selected.id ? 'Submitting…' : 'Raise dispute'}
+                </button>
+              </div>
+            )}
+            {selected.status === 'needs_review' && (
+              <p className="hint">
+                This line is with our team for review. Human evaluation is pending.
+              </p>
             )}
           </>
         ) : (
