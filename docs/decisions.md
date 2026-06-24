@@ -976,6 +976,52 @@ the implementation-half of the pre-flight entry above.
 
 ---
 
+## 2026-06-24 — Phase split: 07-backend-api becomes its own phase, frontend shifts to 08
+
+**Context:** The original phase tracker in `AGENTS.md` bundled
+the HTTP routes into phase 07 alongside the React UI:
+
+```
+07-frontend — React UI
+```
+
+Phase 06 deliberately stopped at `adjudicate_line_item` — a Python
+entry point, no HTTP. Building routes + UI in one chat would
+either: blur the per-phase JSONL discipline, or force the route
+design to follow the UI's needs rather than the domain's contract.
+
+**Options considered:**
+
+- **Keep routes inside phase 07 (rename `07-backend-api-and-frontend`).**
+  One chat, one JSONL. Routes get designed against the UI's
+  actual needs. Cost: one phase doing two things; the JSONL
+  loses the per-phase clarity the AGENTS.md convention is built
+  around.
+- **Bolt routes onto phase 06.** Engine + routes together. Cost:
+  phase 06's JSONL grows large and mixes domain logic with HTTP
+  glue; the reviewer can't easily find "the engine chat."
+- **Split into `07-backend-api` and `08-frontend` (chosen).** Two
+  chats, two JSONLs. The API contract gets finalised before any
+  UI code; the UI consumes a frozen contract rather than driving
+  it.
+
+**Choice:** split. Phase numbers shift: tests → 09, docs → 10,
+qa → 11. Phase list and tracker in `AGENTS.md` updated to match.
+
+**Reasoning:** the AGENTS.md convention is one chat per phase, one
+JSONL per chat. Phase 06's chat already happened with the engine
+scope alone; adding routes in the *same* chat retroactively isn't
+possible. Splitting forward keeps the convention intact and gives
+the reviewer one chat that explains "how was the HTTP contract
+designed?" separately from "how was the UI built?" — useful when
+those are different design conversations.
+
+The seed already has every line item adjudicated at startup, so
+phase 07 can be pure HTTP plumbing (route → repo/service → JSON
+schema) with no engine re-design surface.
+
+---
+
 <!--
 Future entries below. Format:
 

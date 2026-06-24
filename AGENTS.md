@@ -174,10 +174,11 @@ claim-evaluator-bot/
   4. `04-scaffolding` — repo layout, deps, AGENTS.md
   5. `05-backend-core` — entities, persistence
   6. `06-backend-adjudication` — rules engine, state machine
-  7. `07-frontend` — React UI
-  8. `08-tests` — finalize test coverage
-  9. `09-docs` — fill out the three docs
-  10. `10-qa` — bug hunt, polish, edge cases
+  7. `07-backend-api` — FastAPI routes for claims/decisions/audit
+  8. `08-frontend` — React UI
+  9. `09-tests` — finalize test coverage
+  10. `10-docs` — fill out the three docs
+  11. `11-qa` — bug hunt, polish, edge cases
 
 ---
 
@@ -206,11 +207,12 @@ npm run dev
 - [x] **03-planning** — domain model, state machines, rule schema, cost-sharing math, deferred-feature list, sample data (3 members + 3 policies + curated claim set covering every engine path), and persistence layer (SQLAlchemy 2.x, separated domain/ORM, functional repos, per-request session, `create_all` + reset CLI) all locked in. Coverage rules and seed data are YAML in `data/`, loaded on first startup
 - [x] **04-scaffolding** — uv project initialised; backend deps (FastAPI, SQLAlchemy 2.x, Pydantic, PyYAML, uvicorn) + dev deps (pytest, httpx, ruff) locked via `uv.lock`; Vite + React + TS frontend scaffolded; hello-world endpoint (`GET /api/hello`) wired with CORS for `localhost:5173`; frontend page calls it on mount and renders the response
 - [x] **05-backend-core** — domain entities (frozen dataclasses) + claim-state derivation; SQLAlchemy 2.x persistence (engine, Base, per-request session, ORM models with `to_domain`/`from_domain`, functional repositories, accumulator query, explicit audit-event helper); YAML seed data (3 members, 3 policies with 32 rules, 13 curated claims, 15 line items); Pydantic seed loader with discriminated rule-kind union and cross-entity validation; `reset_db` CLI; FastAPI lifespan wires `create_all` + idempotent seeding on startup; `app.*` logger configured for startup/seed/audit/rollback visibility. Test suite (47 tests) covers entity invariants, claim-state derivation, ORM round-trip, repos (active policy, supersession, accumulator), audit helper, and seed-loader failure modes.
-- [ ] **06-backend-adjudication**
-- [ ] **07-frontend**
-- [ ] **08-tests**
-- [ ] **09-docs**
-- [ ] **10-qa**
+- [x] **06-backend-adjudication** — pure rules engine walking six phases (eligibility → coverage → gates → deductible → limits → cost-sharing) with `adjudicate(EngineInput) -> EngineResult` returning a structured per-step explanation and the ledger split; `deductible_applied` column on `AdjudicationDecision` + cross-service-type accumulator (`sum_deductible_applied`) so member-scoped deductible math is a SQL sum; `adjudicate_line_item(session, line_item_id)` service entry writing the decision row with `supersedes_id` chain and one `line_item.decided` audit event per call; `adjudicate_all_pending(session)` startup batch processing in `(claim.submitted_at, line_item.id)` order; FastAPI lifespan drains all pending line items in a separate transaction after seed commits, so the seed's paid_at-set claims never reach the UI half-decided. Test suite (107 tests total; 60 new this phase) covers engine value types + ledger invariant, each phase's exit path, three integration scenarios mirroring seed claims, service-layer happy + denied + needs_review + eligibility paths + intra/cross-claim accumulator flow, repo ordering + supersession filtering, and a real-seed integration test that verifies every pending line item — including C-BOB-001 and C-CAROL-001 — ends decided.
+- [ ] **07-backend-api** — FastAPI routes for claims, line items, decisions, audit
+- [ ] **08-frontend** — React UI consuming the API
+- [ ] **09-tests** — finalize test coverage
+- [ ] **10-docs** — fill out the three docs
+- [ ] **11-qa** — bug hunt, polish, edge cases
 
 Update this list at the end of each phase.
 
