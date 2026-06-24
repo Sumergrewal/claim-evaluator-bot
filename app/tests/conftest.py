@@ -1,8 +1,13 @@
-"""Fixtures for persistence-layer tests.
+"""Shared fixtures for any test that needs a DB session.
 
-Each test gets a fresh in-memory SQLite engine + session, isolated
-from the app's module-level engine. Foreign-key enforcement is
-explicitly enabled (SQLite ships with it off), matching the live app.
+Lives at the test-tree root so persistence and adjudication tests
+share the same `engine`/`session` fixtures without duplication. Each
+test gets a fresh in-memory SQLite engine + session, isolated from
+the app's module-level engine. Foreign-key enforcement is explicitly
+enabled (SQLite ships with it off), matching the live app.
+
+Domain-layer tests don't touch these fixtures — they import nothing
+from this file and pytest's fixture resolver only attaches by name.
 """
 
 from __future__ import annotations
