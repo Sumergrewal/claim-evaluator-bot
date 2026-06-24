@@ -863,6 +863,119 @@ engine's ground rules before any phase code lands.
 
 ---
 
+## 2026-06-24 — Phase 06 engine implementation: audit shape, supersession, startup hook, no engine-driven re-adjudication
+
+**Context:** Building the engine + service + startup batch surfaced
+four implementation-level calls that the pre-flight entry didn't
+cover. They're individually small but each shapes how downstream
+phases (API, frontend, review tooling) will interact with the
+engine, so they belong in the log.
+
+**Sub-decision A — One `line_item.decided` audit event per
+adjudication, payload carries the state transition.**
+
+`adjudicate_line_item` writes exactly one audit row each time it
+runs. Event type is `line_item.decided`; entity is the line item;
+payload includes `decision_id`, `outcome`, `previous_status`,
+`new_status`, `payable_amount`, `member_responsibility`,
+`deductible_applied`, and `supersedes_id`.
+
+**Options considered:**
+
+- One event per phase (six per call). Captures pipeline detail but
+  duplicates the explanation JSON we already store on the decision
+  row, blows up audit volume, and offers nothing the explanation
+  doesn't already.
+- One event per state transition (chosen). Matches the audit
+  helper's design (`record_audit_event` per intentional write),
+  keeps the audit log small enough to read end-to-end, and lets
+  the API show a clean "what changed when" timeline.
+- No audit event from the engine; reviewer-only events. Loses the
+  ability to tell "the system decided this" apart from "no one
+  touched it yet."
+
+**Choice:** one event per call. The explanation JSON already
+captures per-phase detail; the audit log captures per-call state
+transitions. Two surfaces, two purposes.
+
+**Sub-decision B — Supersession contract: every new decision sets
+`supersedes_id` to the previously-current decision; "current"
+means no one points at me.**
+
+The first decision for a line item has `supersedes_id = NULL`.
+Every subsequent decision (which doesn't happen yet, but will once
+disputes land) writes a new row with `supersedes_id` pointing at
+the previously-current row. The "current" decision is read with a
+self-anti-join: `WHERE NOT EXISTS (SELECT 1 FROM decisions s
+WHERE s.supersedes_id = d.id)`. Same query
+`get_current_decision_for_line_item` already used in phase 05.
+
+**Reasoning:** append-only history with a single derivable "head"
+is the same pattern claims use for state and the same shape the
+accumulator queries already filter against. No timestamp races
+(monotone `decided_at` isn't required), no need to mutate prior
+rows. Disputes, reviewer overrides, and engine reruns all fit
+this shape unchanged.
+
+**Sub-decision C — Startup hook runs in a separate session and
+transaction, *after* the seed commits.**
+
+`app/main.py`'s lifespan opens a `SessionLocal()` for `seed_if_empty`
++ `commit`, closes it, then opens a *second* `SessionLocal()` for
+`adjudicate_all_pending` + `commit`. Both failures abort startup
+(uvicorn re-raises), so no HTTP request ever lands on a
+half-initialised DB.
+
+**Options considered:**
+
+- Same session, same transaction. Atomic, but a failed
+  adjudication rolls back the seed too — meaning the next startup
+  re-seeds (idempotent, so fine in isolation) but if the
+  adjudication bug is data-dependent, you're rolling back a
+  perfectly-good seed every restart while you debug.
+- Separate sessions, separate transactions (chosen). Seed commits
+  first; adjudication failures don't undo it. The next startup
+  finds the seed already in place (`seed_if_empty` no-ops) and
+  retries adjudication.
+- No commit; defer to first request. Means the "intermediate
+  state never reaches the UI" requirement breaks if the first
+  HTTP request races the adjudication.
+
+**Choice:** separate transactions. The constraint that matters is
+"no HTTP request lands on an unadjudicated line item," and the
+lifespan's `yield` is what guards that — both transactions
+complete before yield. Splitting them keeps debugging clean.
+
+**Sub-decision D — The engine refuses to re-adjudicate
+already-decided line items.**
+
+`adjudicate_line_item` raises `AdjudicationError` if the line item
+is anything other than `PENDING`. The startup batch's repo helper
+(`list_pending_line_item_ids`) only returns pending ids, so the
+batch never trips this. The API path (phase 07) will get the same
+error if a caller tries to re-adjudicate without going through
+the reviewer flow.
+
+**Reasoning:** re-adjudication is a *reviewer* decision (the
+human disputes path), not an engine decision. Letting the engine
+silently overwrite a prior decision would erase the audit trail
+of what changed and why. Forcing reviewers to mark the line item
+as something other than `PENDING` first (or use a dedicated
+reviewer endpoint that supersedes explicitly) makes the
+provenance of every decision row obvious from its actor field.
+
+The dispute/review flow itself is out of scope for this
+take-home; this contract documents what the engine *won't* do so
+the eventual reviewer flow knows where its boundary is.
+
+**Why bundle these four?** They're the small implementation
+decisions that didn't need pre-flight discussion but matter for
+anyone reading the engine code or the API contract. Each one's a
+single paragraph elsewhere would scatter them; together they're
+the implementation-half of the pre-flight entry above.
+
+---
+
 <!--
 Future entries below. Format:
 
