@@ -2,23 +2,23 @@
 
 Wires the persistence layer to the HTTP layer:
 
-- On app startup, the lifespan handler creates any missing tables
-  (`Base.metadata.create_all`) and runs the idempotent seed loader
-  (`seed_if_empty`). The first launch populates the DB from
-  `data/*.yaml`; subsequent launches no-op because the policies
-  table is non-empty.
+- On app startup, the lifespan handler:
+  1. Creates any missing tables (`Base.metadata.create_all`).
+  2. Runs the idempotent seed loader (`seed_if_empty`). The first
+     launch populates the DB from `data/*.yaml`; subsequent launches
+     no-op because the policies table is non-empty.
+  3. Adjudicates every pending line item (`adjudicate_all_pending`)
+     so the seed's two paid_at-set claims (C-BOB-001, C-CAROL-001)
+     never reach the UI in the "paid_at set, line items pending"
+     intermediate state. The batch is a no-op on subsequent restarts.
 - The only HTTP route at this point is `GET /api/hello`, kept so the
   frontend's CORS check still passes. Real routes land in phase 07.
 
-What's deliberately not here yet:
-
-- The adjudication engine and its startup hook (phase 06). Until that
-  lands, seeded line items remain `pending` and the two claims with
-  `paid_at` derive as `paid` while their line items haven't been
-  decided — see the NOTE in `app/domain/claim_state.py`.
-- Logging configuration. Currently uses `print` for startup
-  diagnostics; a single logging pass replaces all of these after
-  phase 05's structural pieces stabilise.
+The seed and the adjudication batch use separate transactions on
+purpose: a failed adjudication shouldn't roll back the seed (the
+seed is idempotent on retry, while a half-rolled-back state would
+need manual recovery). uvicorn still aborts startup on either
+failure, so no HTTP request lands on a half-initialised DB.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.adjudication.startup import adjudicate_all_pending
 from app.logging_config import configure_logging
 from app.persistence import models  # noqa: F401  registers tables on Base.metadata
 from app.persistence.database import Base, SessionLocal, engine
@@ -47,11 +48,11 @@ ALLOWED_ORIGINS = [
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Startup: ensure schema exists, then seed if the DB is empty.
+    """Startup: ensure schema exists, seed if empty, drain pending line items.
 
-    `SeedLoadError` is logged and re-raised so uvicorn aborts startup —
-    an unseeded DB would otherwise surface much later as confusing
-    404s and empty lists.
+    Any failure logs and re-raises so uvicorn aborts startup — an
+    unseeded or half-adjudicated DB would otherwise surface much
+    later as confusing 404s, empty lists, or wrong ledger amounts.
     """
     logger.info("starting; database = %s", engine.url)
     Base.metadata.create_all(engine)
@@ -63,6 +64,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             session.commit()
     except SeedLoadError:
         logger.exception("seed failed; aborting startup")
+        raise
+
+    try:
+        with SessionLocal() as session:
+            adjudicate_all_pending(session)
+            session.commit()
+    except Exception:
+        logger.exception("startup adjudication failed; aborting startup")
         raise
 
     yield
