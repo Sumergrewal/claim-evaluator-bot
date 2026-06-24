@@ -39,6 +39,7 @@ from app.domain.entities import (
     CoverageRule,
     DecisionOutcome,
     LineItem,
+    LineItemStatus,
     Member,
     Policy,
 )
@@ -167,6 +168,28 @@ def list_line_items_for_claim(
         .order_by(LineItemModel.id)
     ).all()
     return [_line_item_with_current_decision(session, r) for r in rows]
+
+
+def list_pending_line_item_ids(session: Session) -> list[str]:
+    """All `pending` line item ids in claim-arrival order.
+
+    Ordering: `(claim.submitted_at, line_item.id)`. The startup batch
+    walks them in this order so that within a single member's history
+    the engine's accumulators see the chronologically-correct YTD
+    totals — a later claim's deductible/limit lookup against this
+    same session picks up the earlier flushed decisions.
+
+    The `line_item.id` tiebreak keeps the order stable when two
+    claims share a `submitted_at` (currently impossible in seed data,
+    but worth pinning).
+    """
+    rows = session.execute(
+        select(LineItemModel.id)
+        .join(ClaimModel, ClaimModel.id == LineItemModel.claim_id)
+        .where(LineItemModel.status == LineItemStatus.PENDING)
+        .order_by(ClaimModel.submitted_at, LineItemModel.id)
+    ).all()
+    return [r[0] for r in rows]
 
 
 # --- Adjudication decisions ------------------------------------------------
@@ -354,6 +377,7 @@ __all__: Sequence[str] = (
     "list_claims",
     "get_line_item",
     "list_line_items_for_claim",
+    "list_pending_line_item_ids",
     "get_current_decision_for_line_item",
     "list_decisions_for_line_item",
     "sum_payable_for_accumulator",

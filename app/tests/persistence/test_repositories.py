@@ -405,6 +405,147 @@ def test_sum_deductible_applied_respects_period_and_exclude(
     assert excluding_l1 == Decimal("0.00")
 
 
+# --- Pending line items ordering ------------------------------------------
+
+
+def test_list_pending_line_item_ids_orders_by_submitted_at(
+    session: Session,
+) -> None:
+    """Two claims with different submitted_at; the later-submitted
+    claim's line item should appear after the earlier one regardless
+    of insertion order.
+    """
+    _seed_alice_with_2026_policy(session)
+    session.add(
+        ClaimModel.from_domain(
+            Claim(
+                id="C-LATE", member_id="M1", provider_name="x",
+                service_date=date(2026, 6, 1),
+                submitted_at=datetime(2026, 6, 5, 9, 0, 0),
+                paid_at=None,
+            )
+        )
+    )
+    session.add(
+        ClaimModel.from_domain(
+            Claim(
+                id="C-EARLY", member_id="M1", provider_name="x",
+                service_date=date(2026, 2, 1),
+                submitted_at=datetime(2026, 2, 1, 9, 0, 0),
+                paid_at=None,
+            )
+        )
+    )
+    session.flush()
+    session.add(
+        LineItemModel.from_domain(
+            LineItem(
+                id="L-LATE", claim_id="C-LATE", service_type="physio",
+                service_description="x", charged_amount=Decimal("100.00"),
+                preauth_ref=None, status=LineItemStatus.PENDING,
+            )
+        )
+    )
+    session.add(
+        LineItemModel.from_domain(
+            LineItem(
+                id="L-EARLY", claim_id="C-EARLY", service_type="physio",
+                service_description="x", charged_amount=Decimal("100.00"),
+                preauth_ref=None, status=LineItemStatus.PENDING,
+            )
+        )
+    )
+    session.commit()
+
+    assert repo.list_pending_line_item_ids(session) == ["L-EARLY", "L-LATE"]
+
+
+def test_list_pending_line_item_ids_excludes_decided(
+    session: Session,
+) -> None:
+    """Line items that are no longer `pending` (already adjudicated)
+    must not appear in the batch — the startup hook only processes
+    items that haven't been decided yet.
+    """
+    _seed_alice_with_2026_policy(session)
+    _add_approved_physio(
+        session, claim_id="C-DONE", line_id="L-DONE", decision_id="D-DONE",
+        payable=Decimal("100.00"), service_date=date(2026, 2, 1),
+    )
+    session.add(
+        ClaimModel.from_domain(
+            Claim(
+                id="C-NEW", member_id="M1", provider_name="x",
+                service_date=date(2026, 3, 1),
+                submitted_at=datetime(2026, 3, 1, 9, 0, 0),
+                paid_at=None,
+            )
+        )
+    )
+    session.flush()
+    session.add(
+        LineItemModel.from_domain(
+            LineItem(
+                id="L-NEW", claim_id="C-NEW", service_type="physio",
+                service_description="x", charged_amount=Decimal("100.00"),
+                preauth_ref=None, status=LineItemStatus.PENDING,
+            )
+        )
+    )
+    session.commit()
+
+    pending = repo.list_pending_line_item_ids(session)
+    assert pending == ["L-NEW"]
+
+
+def test_list_pending_line_item_ids_returns_empty_on_clean_db(
+    session: Session,
+) -> None:
+    assert repo.list_pending_line_item_ids(session) == []
+
+
+def test_list_pending_line_item_ids_tiebreaks_on_line_item_id(
+    session: Session,
+) -> None:
+    """Two line items on the same claim (same submitted_at) come back
+    in `line_item.id` order — the stable tiebreak that pins ordering
+    when two charges land in the same instant.
+    """
+    _seed_alice_with_2026_policy(session)
+    session.add(
+        ClaimModel.from_domain(
+            Claim(
+                id="C-MULTI", member_id="M1", provider_name="x",
+                service_date=date(2026, 2, 1),
+                submitted_at=datetime(2026, 2, 1, 9, 0, 0),
+                paid_at=None,
+            )
+        )
+    )
+    session.flush()
+    session.add(
+        LineItemModel.from_domain(
+            LineItem(
+                id="L-B", claim_id="C-MULTI", service_type="x",
+                service_description="x", charged_amount=Decimal("50.00"),
+                preauth_ref=None, status=LineItemStatus.PENDING,
+            )
+        )
+    )
+    session.add(
+        LineItemModel.from_domain(
+            LineItem(
+                id="L-A", claim_id="C-MULTI", service_type="x",
+                service_description="x", charged_amount=Decimal("50.00"),
+                preauth_ref=None, status=LineItemStatus.PENDING,
+            )
+        )
+    )
+    session.commit()
+
+    assert repo.list_pending_line_item_ids(session) == ["L-A", "L-B"]
+
+
 # --- Derived amounts on line items ----------------------------------------
 
 
