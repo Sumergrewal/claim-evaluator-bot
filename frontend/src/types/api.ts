@@ -31,6 +31,7 @@ export type CoverageRuleOut = {
   id: string
   policy_id: string
   policy_name: string
+  member_id: string
   service_type: string
   kind: string
   parameters: Record<string, unknown>

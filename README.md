@@ -10,14 +10,17 @@ for the reasoning behind every non-trivial choice.
 ## Status
 
 Runnable end-to-end: **QuickClaim** UI + FastAPI backend + six-phase
-rules engine. On first launch the backend seeds from `data/*.yaml` and
-reviews every pending line item before serving HTTP requests.
+rules engine. Members submit claims with policy-scoped service-type
+pickers, drill into structured decision explanations, and file disputes
+on approved/denied line items. On first launch the backend seeds from
+`data/*.yaml` and reviews every pending line item before serving HTTP
+requests.
 
 | Layer | Delivered |
 |---|---|
 | Backend | Domain model, SQLite persistence, YAML seed, rules engine, REST API |
-| Frontend | Claims list (member filter), claim drill-down, submit form, rule tooltips |
-| Tests | 197 pytest + 29 Vitest |
+| Frontend | Claims list (member filter), claim drill-down, submit form with service-type dropdown, dispute filing, rule tooltips |
+| Tests | 202 pytest + 31 Vitest |
 | Docs | [`domain-model.md`](docs/domain-model.md), [`decisions.md`](docs/decisions.md) — [`self-review.md`](docs/self-review.md) in progress |
 
 See [`docs/decisions.md`](docs/decisions.md) for application flow, built
@@ -126,7 +129,7 @@ cd ..
 |---|---|
 | `/` | Claims list with member filter |
 | `/claims/:id` | Claim detail — summary, line items, coverage decision breakdown, audit timeline |
-| `/submit` | Submit a new claim; navigates to the reviewed result |
+| `/submit` | Submit a new claim (service types filtered to the member's policy); navigates to the reviewed result |
 
 The UI talks to the backend at `http://localhost:8000` by default. Override
 with `VITE_API_BASE` if needed.
@@ -140,7 +143,8 @@ with `VITE_API_BASE` if needed.
 | Carol (M-003) | Dental | Paid claim, partial approval, missing preauth |
 
 Try service types like `general_consultation`, `physiotherapy`, `mri`,
-`bariatric_surgery`, `cleaning`, `cosmetic_whitening`.
+`bariatric_surgery`, `cleaning`, `filling`, `crown`, `root_canal`,
+`cosmetic_whitening`.
 
 ## API
 
@@ -150,10 +154,11 @@ All routes are under `/api`. Money fields are JSON strings (e.g.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/members` | List members (filters + submit form) |
-| `GET` | `/api/coverage-rules` | Coverage rule catalog with tooltip descriptions |
+| `GET` | `/api/coverage-rules` | Coverage rule catalog with tooltip descriptions (`member_id` per rule for submit-form filtering) |
 | `GET` | `/api/claims` | List claims; optional `?member_id=` filter |
 | `GET` | `/api/claims/{claim_id}` | Drill-down: line items, decisions, explanations, audit timeline |
 | `POST` | `/api/claims` | Submit claim; server generates ids, reviews line items, returns drill-down shape |
+| `POST` | `/api/line-items/{line_item_id}/dispute` | File a member dispute on an approved/denied line item; moves it to `needs_review`, returns refreshed claim drill-down |
 | `GET` | `/api/claims/{claim_id}/audit` | Audit timeline for a claim and its line items |
 | `GET` | `/api/line-items/{line_item_id}/audit` | Audit timeline for one line item |
 
@@ -202,10 +207,10 @@ place.
 ## Running tests
 
 ```bash
-# Backend — from repo root (197 tests)
+# Backend — from repo root (202 tests)
 uv run pytest
 
-# Frontend — from frontend/ (29 tests)
+# Frontend — from frontend/ (31 tests)
 cd frontend
 npm test
 ```

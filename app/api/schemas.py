@@ -60,6 +60,7 @@ class CoverageRuleOut(BaseModel):
     id: str
     policy_id: str
     policy_name: str
+    member_id: str
     service_type: str
     kind: RuleKind
     parameters: dict[str, Any]
@@ -67,11 +68,14 @@ class CoverageRuleOut(BaseModel):
     parameters_summary: str
 
     @classmethod
-    def from_domain(cls, rule: CoverageRule, policy_name: str) -> Self:
+    def from_domain(
+        cls, rule: CoverageRule, policy_name: str, member_id: str
+    ) -> Self:
         return cls(
             id=rule.id,
             policy_id=rule.policy_id,
             policy_name=policy_name,
+            member_id=member_id,
             service_type=rule.service_type,
             kind=rule.kind,
             parameters=dict(rule.parameters),

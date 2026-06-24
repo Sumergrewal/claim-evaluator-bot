@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ApiError, listMembers, submitClaim } from '../api/client'
+import { ApiError, listCoverageRules, listMembers, submitClaim } from '../api/client'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
-import type { LineItemSubmitIn, MemberOut } from '../types/api'
+import type { CoverageRuleOut, LineItemSubmitIn, MemberOut } from '../types/api'
+import { formatServiceType } from '../utils/format'
+import { serviceTypesForMember } from '../utils/serviceTypes'
 
 type LineItemDraft = LineItemSubmitIn & { key: string }
 
@@ -21,7 +23,8 @@ function newLineItem(): LineItemDraft {
 export function SubmitClaimPage() {
   const navigate = useNavigate()
   const [members, setMembers] = useState<MemberOut[]>([])
-  const [loadingMembers, setLoadingMembers] = useState(true)
+  const [coverageRules, setCoverageRules] = useState<CoverageRuleOut[]>([])
+  const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [memberId, setMemberId] = useState('')
@@ -32,17 +35,34 @@ export function SubmitClaimPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
+  const availableServiceTypes = useMemo(
+    () => serviceTypesForMember(coverageRules, memberId),
+    [coverageRules, memberId],
+  )
+
   useEffect(() => {
-    listMembers()
-      .then((rows) => {
-        setMembers(rows)
-        if (rows[0]) setMemberId(rows[0].id)
+    Promise.all([listMembers(), listCoverageRules()])
+      .then(([memberRows, ruleRows]) => {
+        setMembers(memberRows)
+        setCoverageRules(ruleRows)
+        if (memberRows[0]) setMemberId(memberRows[0].id)
       })
       .catch((err: unknown) => {
         setLoadError(err instanceof Error ? err.message : String(err))
       })
-      .finally(() => setLoadingMembers(false))
+      .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (availableServiceTypes.length === 0) return
+    setLineItems((rows) =>
+      rows.map((row) =>
+        row.service_type && !availableServiceTypes.includes(row.service_type)
+          ? { ...row, service_type: '' }
+          : row,
+      ),
+    )
+  }, [availableServiceTypes])
 
   function updateLine(key: string, patch: Partial<LineItemDraft>) {
     setLineItems((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
@@ -112,7 +132,9 @@ export function SubmitClaimPage() {
     }
   }
 
-  if (loadingMembers) return <LoadingState message="Loading members…" />
+  const selectedMember = members.find((m) => m.id === memberId)
+
+  if (loading) return <LoadingState message="Loading form…" />
   if (loadError) return <ErrorState message={loadError} />
 
   return (
@@ -179,13 +201,18 @@ export function SubmitClaimPage() {
               <div className="line-item-form__grid">
                 <label className="field">
                   <span>Service type</span>
-                  <input
-                    type="text"
+                  <select
                     value={row.service_type}
                     onChange={(e) => updateLine(row.key, { service_type: e.target.value })}
-                    placeholder="e.g. physiotherapy"
                     required
-                  />
+                  >
+                    <option value="">Select a service type…</option>
+                    {availableServiceTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {formatServiceType(type)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="field">
                   <span>Description</span>
@@ -240,11 +267,15 @@ export function SubmitClaimPage() {
       </form>
 
       <aside className="hint-card">
-        <h3>Try these service types</h3>
+        <h3>Service types by member</h3>
         <p>
-          Seed data uses types like <code>general_consultation</code>,{' '}
-          <code>physiotherapy</code>, <code>mri</code>, <code>bariatric_surgery</code>,{' '}
-          <code>cleaning</code>. Outcomes depend on the member&apos;s policy.
+          The dropdown lists services covered on{' '}
+          {selectedMember ? <strong>{selectedMember.name}</strong> : 'the selected member'}
+          &apos;s policy. Health plans (Alice, Bob) include types like{' '}
+          <code>general_consultation</code>, <code>physiotherapy</code>, <code>mri</code>, and{' '}
+          <code>bariatric_surgery</code>. Carol&apos;s dental plan adds{' '}
+          <code>cleaning</code>, <code>filling</code>, <code>crown</code>,{' '}
+          <code>root_canal</code>, and <code>cosmetic_whitening</code> (excluded).
         </p>
       </aside>
     </div>

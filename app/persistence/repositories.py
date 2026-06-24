@@ -112,14 +112,14 @@ def list_rules_for_policy(
 
 def list_coverage_rules(
     session: Session,
-) -> list[tuple[CoverageRule, str]]:
-    """Every coverage rule with its policy display name (for UI tooltips)."""
+) -> list[tuple[CoverageRule, str, str]]:
+    """Every coverage rule with policy display name and member id (for UI)."""
     rows = session.execute(
-        select(CoverageRuleModel, PolicyModel.name)
+        select(CoverageRuleModel, PolicyModel.name, PolicyModel.member_id)
         .join(PolicyModel, CoverageRuleModel.policy_id == PolicyModel.id)
         .order_by(CoverageRuleModel.id)
     ).all()
-    return [(row[0].to_domain(), row[1]) for row in rows]
+    return [(row[0].to_domain(), row[1], row[2]) for row in rows]
 
 
 def list_rules_for_service(

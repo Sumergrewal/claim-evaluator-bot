@@ -24,7 +24,8 @@ def list_coverage_rules(session: SessionDep) -> list[CoverageRuleOut]:
     """All coverage rules with human-readable descriptions for tooltips."""
     rows = repo.list_coverage_rules(session)
     out = [
-        CoverageRuleOut.from_domain(rule, policy_name) for rule, policy_name in rows
+        CoverageRuleOut.from_domain(rule, policy_name, member_id)
+        for rule, policy_name, member_id in rows
     ]
     logger.info("GET /api/coverage-rules -> %d rule(s)", len(out))
     return out
