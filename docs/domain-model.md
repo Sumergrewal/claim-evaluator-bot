@@ -251,14 +251,10 @@ stored claim-status field is `paid_at`.
 
 Derivation rule, applied in order:
 
-1. If `paid_at` is set → `paid`.
-2. Else, look at all line items:
-   - All have no decision yet → `submitted`.
-   - Any line item is `pending` or `needs_review` → `under_review`.
-   - All line items `approved` → `approved`.
-   - All line items `denied` → `denied`.
-   - Mix of `approved` + `denied`, no `needs_review` →
-     `partially_approved`.
+1. Look at all line items and derive a base state (`submitted`,
+   `under_review`, `approved`, `denied`, `partially_approved`).
+2. If `paid_at` is set **and** the base state is `approved` or
+   `partially_approved` → `paid`.
 
 ```mermaid
 stateDiagram-v2

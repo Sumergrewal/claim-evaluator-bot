@@ -36,38 +36,31 @@ def derive_claim_state(
 ) -> ClaimAdjudicationState:
     """Return the claim's current adjudication state.
 
-    Order of checks matches `docs/domain-model.md`:
-
-    1. `paid_at` set → `paid` (precondition: only set when state was
-       already `approved` or `partially_approved`).
-    2. No line items, or all line items still `pending` → `submitted`.
-    3. Any line item `pending` or `needs_review` → `under_review`.
-    4. All `approved` → `approved`; all `denied` → `denied`;
-       otherwise (mix of approved + denied) → `partially_approved`.
-
-    NOTE (seed/engine ordering): the `paid_at` short-circuit means a
-    seeded claim with `paid_at` set will derive as `paid` even before
-    the engine has produced decisions for its line items. The engine
-    (phase 06) runs on startup right after the seed loader, so the
-    intermediate state — claim labelled `paid` while line items are
-    still `pending` — is not observable through the UI. Anyone
-    inspecting the DB between seed-load and engine-run will see it.
+    Line-item statuses are evaluated first. `paid_at` elevates the
+    claim to `paid` only once adjudication has finished in a
+    payable state (`approved` or `partially_approved`). That keeps
+    the claim badge consistent with line-item rows — a seeded claim
+    with `paid_at` set but line items still `pending` (the brief
+    window before the startup adjudication batch) shows `submitted`
+    or `under_review`, not `paid`.
     """
-    if paid_at is not None:
-        return ClaimAdjudicationState.PAID
-
     statuses = {li.status for li in line_items}
 
     if not statuses or statuses == {LineItemStatus.PENDING}:
-        return ClaimAdjudicationState.SUBMITTED
+        base = ClaimAdjudicationState.SUBMITTED
+    elif LineItemStatus.PENDING in statuses or LineItemStatus.NEEDS_REVIEW in statuses:
+        base = ClaimAdjudicationState.UNDER_REVIEW
+    elif statuses == {LineItemStatus.APPROVED}:
+        base = ClaimAdjudicationState.APPROVED
+    elif statuses == {LineItemStatus.DENIED}:
+        base = ClaimAdjudicationState.DENIED
+    else:
+        base = ClaimAdjudicationState.PARTIALLY_APPROVED
 
-    if LineItemStatus.PENDING in statuses or LineItemStatus.NEEDS_REVIEW in statuses:
-        return ClaimAdjudicationState.UNDER_REVIEW
+    if paid_at is not None and base in (
+        ClaimAdjudicationState.APPROVED,
+        ClaimAdjudicationState.PARTIALLY_APPROVED,
+    ):
+        return ClaimAdjudicationState.PAID
 
-    if statuses == {LineItemStatus.APPROVED}:
-        return ClaimAdjudicationState.APPROVED
-
-    if statuses == {LineItemStatus.DENIED}:
-        return ClaimAdjudicationState.DENIED
-
-    return ClaimAdjudicationState.PARTIALLY_APPROVED
+    return base

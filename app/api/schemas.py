@@ -32,20 +32,52 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.adjudication.types import PhaseName, StepResult
 from app.domain.claim_state import ClaimAdjudicationState, derive_claim_state
+from app.api.rule_descriptions import (
+    describe_coverage_rule,
+    format_rule_parameters,
+)
 from app.domain.entities import (
     AdjudicationDecision,
     AuditEvent,
     Claim,
+    CoverageRule,
     DecisionOutcome,
     LineItem,
     LineItemStatus,
     Member,
+    RuleKind,
 )
 
 _ZERO_MONEY = Decimal("0.00")
 
 
 # --- Outputs ---------------------------------------------------------------
+
+
+class CoverageRuleOut(BaseModel):
+    """One coverage rule with a tooltip-friendly description."""
+
+    id: str
+    policy_id: str
+    policy_name: str
+    service_type: str
+    kind: RuleKind
+    parameters: dict[str, Any]
+    description: str
+    parameters_summary: str
+
+    @classmethod
+    def from_domain(cls, rule: CoverageRule, policy_name: str) -> Self:
+        return cls(
+            id=rule.id,
+            policy_id=rule.policy_id,
+            policy_name=policy_name,
+            service_type=rule.service_type,
+            kind=rule.kind,
+            parameters=dict(rule.parameters),
+            description=describe_coverage_rule(rule, policy_name),
+            parameters_summary=format_rule_parameters(rule),
+        )
 
 
 class MemberOut(BaseModel):
@@ -365,6 +397,7 @@ class ClaimSubmitIn(_StrictIn):
 
 __all__ = (
     "AuditEventOut",
+    "CoverageRuleOut",
     "ClaimDetailOut",
     "ClaimSubmitIn",
     "ClaimSummaryOut",

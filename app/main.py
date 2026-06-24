@@ -42,6 +42,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.adjudication.startup import adjudicate_all_pending
 from app.api.routes_audit import router as audit_router
 from app.api.routes_claims import router as claims_router
+from app.api.routes_coverage_rules import router as coverage_rules_router
 from app.api.routes_members import router as members_router
 from app.logging_config import configure_logging
 from app.persistence import models  # noqa: F401  registers tables on Base.metadata
@@ -108,5 +109,6 @@ app.add_middleware(
 )
 
 app.include_router(members_router)
+app.include_router(coverage_rules_router)
 app.include_router(claims_router)
 app.include_router(audit_router)

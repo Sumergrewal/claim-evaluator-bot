@@ -33,8 +33,18 @@ _PENDING = _li(LineItemStatus.PENDING)
 _NEEDS_REVIEW = _li(LineItemStatus.NEEDS_REVIEW)
 
 
-def test_paid_at_set_returns_paid_regardless_of_line_items() -> None:
+def test_paid_at_with_pending_line_items_does_not_return_paid() -> None:
     state = derive_claim_state(datetime(2026, 1, 1), [_PENDING])
+    assert state is ClaimAdjudicationState.SUBMITTED
+
+
+def test_paid_at_with_all_approved_returns_paid() -> None:
+    state = derive_claim_state(datetime(2026, 1, 1), [_APPROVED])
+    assert state is ClaimAdjudicationState.PAID
+
+
+def test_paid_at_with_partially_approved_mix_returns_paid() -> None:
+    state = derive_claim_state(datetime(2026, 1, 1), [_APPROVED, _DENIED])
     assert state is ClaimAdjudicationState.PAID
 
 

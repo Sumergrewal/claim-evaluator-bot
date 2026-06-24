@@ -109,6 +109,18 @@ def list_rules_for_policy(
     return [r.to_domain() for r in rows]
 
 
+def list_coverage_rules(
+    session: Session,
+) -> list[tuple[CoverageRule, str]]:
+    """Every coverage rule with its policy display name (for UI tooltips)."""
+    rows = session.execute(
+        select(CoverageRuleModel, PolicyModel.name)
+        .join(PolicyModel, CoverageRuleModel.policy_id == PolicyModel.id)
+        .order_by(CoverageRuleModel.id)
+    ).all()
+    return [(row[0].to_domain(), row[1]) for row in rows]
+
+
 def list_rules_for_service(
     session: Session, policy_id: str, service_type: str
 ) -> list[CoverageRule]:
@@ -408,6 +420,7 @@ __all__: Sequence[str] = (
     "get_policy",
     "get_active_policy_for",
     "list_rules_for_policy",
+    "list_coverage_rules",
     "list_rules_for_service",
     "get_claim",
     "list_claims",
