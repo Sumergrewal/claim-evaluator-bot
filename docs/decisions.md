@@ -82,6 +82,8 @@ Full deferral reasoning lives in the dated entries below and in
 
 ### Assumptions
 
+- **No diagnosis codes (ICD-10) on claims.** The brief cites them as PHI
+  context; we adjudicate on `service_type` + `service_description` only.
 - **One active policy per member per `service_date`.** No overlapping
   policy windows; the engine picks the policy active on the claim's
   service date.

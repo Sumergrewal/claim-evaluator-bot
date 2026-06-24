@@ -21,7 +21,7 @@ requests.
 | Backend | Domain model, SQLite persistence, YAML seed, rules engine, REST API |
 | Frontend | Claims list (member filter), claim drill-down, submit form with service-type dropdown, dispute filing, rule tooltips |
 | Tests | 202 pytest + 31 Vitest |
-| Docs | [`domain-model.md`](docs/domain-model.md), [`decisions.md`](docs/decisions.md) — [`self-review.md`](docs/self-review.md) in progress |
+| Docs | [`domain-model.md`](docs/domain-model.md), [`decisions.md`](docs/decisions.md), [`self-review.md`](docs/self-review.md) |
 
 See [`docs/decisions.md`](docs/decisions.md) for application flow, built
 vs skipped, and assumptions.
