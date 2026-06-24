@@ -43,9 +43,9 @@ Examples:
 6. `06-backend-adjudication` — rules engine, state machine
 7. `07-backend-api` — FastAPI routes for claims/decisions/audit
 8. `08-frontend` — QuickClaim React UI
-9. `09-tests` — finalize test coverage (frontend Vitest baseline done)
+9. `09-tests` — test coverage (incremental alongside each build phase; no separate end-of-project pass)
 10. `10-docs` — fill out the three docs
-11. `11-qa` — bug hunt, polish, edge cases
+11. `11-qa` — bug hunt, polish, edge cases (`11-qa__1fd2a39f-….jsonl` archived)
 
 Logs are copied in **at the end of each phase** as part of that phase's
 commit. This keeps the git history coherent — each phase's JSONL is

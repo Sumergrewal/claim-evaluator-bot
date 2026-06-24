@@ -15,6 +15,11 @@ When to run it:
   it won't migrate existing tables).
 - To wipe demo state and return to the freshly-seeded baseline.
 
+After seeding, runs the same `adjudicate_all_pending` batch the app
+lifespan runs on startup so a reset DB is immediately reviewable —
+seed YAML plants line items as `pending`, and without this step every
+claim would show **Submitted** until the next server restart.
+
 Reads `DATABASE_URL` (default `sqlite:///./claims.db`) the same way
 the app does, so the script always operates on whatever DB the app
 would. Stop the dev server before running this; SQLite raises
@@ -30,6 +35,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.adjudication.startup import adjudicate_all_pending
 from app.logging_config import configure_logging
 from app.persistence import models  # noqa: F401  registers tables on Base.metadata
 from app.persistence.database import Base, engine
@@ -53,6 +59,12 @@ def main() -> int:
         with Session(engine) as session:
             load_seed_data(session)
             session.commit()
+
+        logger.info("adjudicating pending line items")
+        with Session(engine) as session:
+            decided = adjudicate_all_pending(session)
+            session.commit()
+        logger.info("decided %d line item(s)", len(decided))
     except SeedLoadError:
         logger.exception("seed failed")
         return 1

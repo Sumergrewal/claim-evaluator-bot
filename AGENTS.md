@@ -173,12 +173,12 @@ claim-evaluator-bot/
   3. `03-planning` — architecture, schema, state machines
   4. `04-scaffolding` — repo layout, deps, AGENTS.md
   5. `05-backend-core` — entities, persistence
-6. `06-backend-adjudication` — rules engine, state machine
-7. `07-backend-api` — FastAPI routes for claims/decisions/audit
-8. `08-frontend` — QuickClaim React UI
-9. `09-tests` — finalize test coverage
-10. `10-docs` — fill out the three docs
-11. `11-qa` — bug hunt, polish, edge cases
+  6. `06-backend-adjudication` — rules engine, state machine
+  7. `07-backend-api` — FastAPI routes for claims/decisions/audit
+  8. `08-frontend` — QuickClaim React UI
+  9. `09-tests` — test coverage (written incrementally alongside each phase, not bolted on at the end)
+  10. `10-docs` — fill out the three docs
+  11. `11-qa` — bug hunt, polish, edge cases
 
 ---
 
@@ -188,7 +188,7 @@ claim-evaluator-bot/
 # Backend
 cd app
 uv sync
-uv run uvicorn main:app --reload
+uv run uvicorn app.main:app --reload
 
 # Frontend (in another terminal)
 cd frontend
@@ -210,9 +210,9 @@ npm run dev
 - [x] **06-backend-adjudication** — pure rules engine walking six phases (eligibility → coverage → gates → deductible → limits → cost-sharing) with `adjudicate(EngineInput) -> EngineResult` returning a structured per-step explanation and the ledger split; `deductible_applied` column on `AdjudicationDecision` + cross-service-type accumulator (`sum_deductible_applied`) so member-scoped deductible math is a SQL sum; `adjudicate_line_item(session, line_item_id)` service entry writing the decision row with `supersedes_id` chain and one `line_item.decided` audit event per call; `adjudicate_all_pending(session)` startup batch processing in `(claim.submitted_at, line_item.id)` order; FastAPI lifespan drains all pending line items in a separate transaction after seed commits, so the seed's paid_at-set claims never reach the UI half-decided. Test suite (107 tests total; 60 new this phase) covers engine value types + ledger invariant, each phase's exit path, three integration scenarios mirroring seed claims, service-layer happy + denied + needs_review + eligibility paths + intra/cross-claim accumulator flow, repo ordering + supersession filtering, and a real-seed integration test that verifies every pending line item — including C-BOB-001 and C-CAROL-001 — ends decided.
 - [x] **07-backend-api** — FastAPI routes for claims, line items, decisions, audit
 - [x] **08-frontend** — QuickClaim React SPA (list, detail, submit), rule tooltips via `GET /api/coverage-rules`, paid-state derivation fix
-- [ ] **09-tests** — finalize test coverage (frontend Vitest baseline landed; coverage-rules API route + page-level FE tests still open)
+- [x] **09-tests** — tests written alongside each phase per project convention (197 pytest + 29 Vitest at hand-off); domain/engine/API paths well covered; frontend component + API-client tests landed in phase 08; `reset_db` adjudication test added in QA. Not pursuing a separate end-of-project test pass — git history is the proof.
 - [ ] **10-docs** — fill out the three docs
-- [ ] **11-qa** — bug hunt, polish, edge cases
+- [x] **11-qa** — manual break-test playbook, live API QA, `reset_db` adjudication fix, 404 UI fix, seed-matrix verification; JSONL archived in `ai-artifacts/`
 
 Update this list at the end of each phase.
 

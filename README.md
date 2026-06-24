@@ -167,11 +167,16 @@ explanation in the response.
 The SQLite file `claims.db` lives in the repo root (gitignored). First
 launch auto-seeds from `data/*.yaml`; later launches persist your state.
 
-To wipe and re-seed (after schema changes or to start fresh):
+To wipe and re-seed (after schema changes or to start fresh). Stop
+the dev server first (SQLite locks), then restart after reset:
 
 ```bash
 uv run python -m app.scripts.reset_db
+uv run uvicorn app.main:app --reload
 ```
+
+The reset script adjudicates every pending seed line item after
+loading YAML, so the DB matches what a first launch would show.
 
 Run this whenever SQLAlchemy models change — the app uses
 `create_all()` (not Alembic), so existing tables are not migrated in

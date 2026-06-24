@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getClaim } from '../api/client'
+import { ApiError, getClaim } from '../api/client'
 import { AuditTimeline } from '../components/AuditTimeline'
 import { ErrorState } from '../components/ErrorState'
 import { LineItemTable } from '../components/LineItemTable'
@@ -14,7 +14,7 @@ export function ClaimDetailPage() {
   const { claimId } = useParams<{ claimId: string }>()
   const [claim, setClaim] = useState<ClaimDetailOut | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; notFound: boolean } | null>(null)
 
   useEffect(() => {
     if (!claimId) return
@@ -26,7 +26,14 @@ export function ClaimDetailPage() {
       .then(setClaim)
       .catch((err: unknown) => {
         if (controller.signal.aborted) return
-        setError(err instanceof Error ? err.message : String(err))
+        if (err instanceof ApiError && err.status === 404) {
+          setError({ message: err.message, notFound: true })
+          return
+        }
+        setError({
+          message: err instanceof Error ? err.message : String(err),
+          notFound: false,
+        })
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -36,12 +43,51 @@ export function ClaimDetailPage() {
   }, [claimId])
 
   if (!claimId) {
-    return <ErrorState title="Missing claim id" message="No claim id in the URL." />
+    return (
+      <ErrorState
+        title="Missing claim id"
+        message="No claim id in the URL."
+        showBackendHint={false}
+        footer={
+          <p className="hint">
+            <Link to="/">← Back to claims</Link>
+          </p>
+        }
+      />
+    )
   }
 
   if (loading) return <LoadingState message="Loading claim…" />
-  if (error) return <ErrorState message={error} />
-  if (!claim) return <ErrorState message="Claim not found." />
+  if (error) {
+    return (
+      <ErrorState
+        title={error.notFound ? 'Claim not found' : undefined}
+        message={error.message}
+        showBackendHint={!error.notFound}
+        footer={
+          error.notFound ? (
+            <p className="hint">
+              <Link to="/">← Back to claims</Link>
+            </p>
+          ) : undefined
+        }
+      />
+    )
+  }
+  if (!claim) {
+    return (
+      <ErrorState
+        title="Claim not found"
+        message="This claim could not be loaded."
+        showBackendHint={false}
+        footer={
+          <p className="hint">
+            <Link to="/">← Back to claims</Link>
+          </p>
+        }
+      />
+    )
+  }
 
   return (
     <div className="page">
